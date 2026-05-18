@@ -21,7 +21,17 @@ import numpy as np
 
 
 
-def MHT_selection(ds, average=True, anomalies=False, one_band_sel=False, lat=None, statistics=False, ci=95, drop65=True, printout=False):
+def MHT_selection(
+        ds,
+        average=True, 
+        anomalies=False, 
+        one_band_sel=False, 
+        lat=None, 
+        statistics=False, 
+        ci=95, 
+        drop65=True, 
+        printout=False
+    ):
     """
     Select and process MHT data
     get anomalies and statistics,
