@@ -30,6 +30,7 @@ def MHT_selection(
         statistics=False, 
         ci=95, 
         drop65=True, 
+        trend=False,
         printout=False
     ):
     """
@@ -49,6 +50,7 @@ def MHT_selection(
     lat_labels = [f"{np.abs(lat)}{'N' if lat > 0 else 'S'}" for lat in lats]
     MHT_prob = ds.MHT
     
+   
     if printout:
         print("Initial MHT dims: ", MHT_prob.dims)
         nan_mask = np.isnan(MHT_prob).any(dim=["lat", "posterior_samples"])
@@ -100,15 +102,37 @@ def MHT_selection(
     if one_band_sel:
         if lat is None:
             raise ValueError("Please provide a latitude value for one_band_sel.")
+        
         lat_idx = np.argmin(np.abs(lats - lat))
-        MHT_lat = MHT.isel(lat=lat_idx) 
+        
+        # Keep posterior samples for CI/distribution at this latitude
+        MHT_lat_prob = MHT_prob.isel(lat=lat_idx)   # shape: (TIME, posterior_samples)
+        MHT_lat      = MHT.isel(lat=lat_idx)         # shape: (TIME,) — mean over samples
+        
         MHT_lat_anom = mht_anom.isel(lat=lat_idx) if anomalies else None
-        MHT_lat = _name(MHT_lat, f"MHT lat {lat_labels[lat_idx]}")
+
+        MHT_lat      = _name(MHT_lat, f"MHT lat {lat_labels[lat_idx]}")
+        MHT_lat_prob = _name(MHT_lat_prob, f"MHT lat prob {lat_labels[lat_idx]}")
+
+        # CI for this specific latitude
+        if ci:
+            lower = MHT_lat_prob.quantile((100 - ci) / 200, dim="posterior_samples", skipna=True)
+            upper = MHT_lat_prob.quantile(1 - (100 - ci) / 200, dim="posterior_samples", skipna=True)
+            
+            # time-mean CI bounds
+            lower_tmean = lower.mean(dim="TIME", skipna=True)
+            upper_tmean = upper.mean(dim="TIME", skipna=True)
+            lat_mean    = MHT_lat.mean(dim="TIME", skipna=True)
+            
+            lat_ci = np.array([lat_mean - lower_tmean, upper_tmean - lat_mean])
+
         if anomalies:
             MHT_lat_anom = _name(MHT_lat_anom, f"MHT lat anom {lat_labels[lat_idx]}")
-        if printout:
-            print(f"Selected latitude: {lats[lat_idx]}°N")
-
+            
+            
+    if trend:
+        # compute the trend for the dataset over time
+        pass
     
     if printout:
         target = mht_anom if anomalies else MHT
@@ -118,11 +142,12 @@ def MHT_selection(
         print(f"Latitude selection shape: {lat_sel.shape if lat_sel is not None else 'N/A'}")
 
     return {
-        "lats" : lats,
-        "MHT": MHT,
-        "MHT_anom": mht_anom,
-        "MHT_lat": MHT_lat,
-        "MHT_lat_anom": MHT_lat_anom if anomalies else None,
+        "lats"         : lats,
+        "MHT"          : MHT,
+        "MHT_anom"     : mht_anom,
+        "MHT_lat"      : MHT_lat,
+        "MHT_lat_prob" : MHT_lat_prob if one_band_sel else None,   # full distribution
+        "MHT_lat_ci"   : lat_ci       if one_band_sel and ci else None,  # CI at this lat
+        "MHT_lat_anom" : MHT_lat_anom if anomalies else None,
         "MHT_statistics": statistics_results
     }
-    
