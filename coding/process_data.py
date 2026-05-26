@@ -19,15 +19,28 @@ import numpy as np
 
 
 
+def calc_ci(data, ci=90):
+    if not "posterior_samples" in data.dims:
+        return print("Can't compute CI without distribution.")
+    else:
+        lower = data.quantile((100 - ci) / 200, dim="posterior_samples", skipna=True)   
+        upper = data.quantile(1 - (100 - ci) / 200, dim="posterior_samples", skipna=True)
+
+        data_mean = data.mean(dim="posterior_samples", skipna=True)
+        
+        lower_err = data_mean - lower   # distance below mean
+        upper_err = upper - data_mean   # distance above mean
+
+        return np.array([lower_err, upper_err])        
 
 
 def MHT_selection(
         ds,
-        average=True, 
+        statistics=False, 
+        time_mean=False,
         anomalies=False, 
         one_band_sel=False, 
         lat=None, 
-        statistics=False, 
         ci=95, 
         drop65=True, 
         trend=False,
@@ -42,53 +55,47 @@ def MHT_selection(
     def _name(da, label):
         da.name = label
         return da
+    
     if drop65:
         ds = ds.where(ds.LATITUDE != 65, drop=True)
     # define labels for the latitdues
     lats = ds.LATITUDE.values
     n_lats = len(lats)
     lat_labels = [f"{np.abs(lat)}{'N' if lat > 0 else 'S'}" for lat in lats]
-    MHT_prob = ds.MHT
+    MHT = ds.MHT
     
-   
     if printout:
-        print("Initial MHT dims: ", MHT_prob.dims)
-        nan_mask = np.isnan(MHT_prob).any(dim=["lat", "posterior_samples"])
-        print("Timesteps with NaN: ", MHT_prob.TIME.where(nan_mask, drop=True).values)# Average over posterior samples or keep all
-        
-    MHT = MHT_prob.mean(dim="posterior_samples", skipna=True) if average else MHT_prob
-    MHT_prob = MHT_prob.dropna(dim="TIME", how="any")  # Drop NaN timesteps from the probability data as well
+        print("Initial MHT dims: ", MHT.dims)
+        nan_mask = np.isnan(MHT).any(dim=["lat", "posterior_samples"])
+        print("Timesteps with NaN: ", MHT.TIME.where(nan_mask, drop=True).values)# Average over posterior samples or keep all
+    
     
     # Drop timesteps with any NaN
     MHT = MHT.dropna(dim="TIME", how="any")
     # get mean and std
-    MHt = _name(MHT, "MHT (all bands)")
-    statistics_results = None
+    statistics_results = {}
     if statistics:
-        mht_mean = MHT.mean(dim="TIME", skipna=True)
-        mht_std = MHT.std(dim="TIME", skipna=True)
+        # get mean over post. samples  
+        MHT_mean = MHT.mean(dim="posterior_samples", skipna=True)
+        MHT_std = MHT.std(dim="posterior_samples", skipna=True)
         
-        mht_mean = _name(mht_mean, "MHT mean")
-        mht_std = _name(mht_std, "MHT std")
-        
-        statistics_results = {
-            "mean": mht_mean,
-            "std": mht_std
-        }
+        statistics_results["mean"] = MHT_mean
+        statistics_results["std"] = MHT_std
         
         if ci:
+            ci_array = calc_ci(MHT, 90,)
+            statistics_results["ci"] = ci_array
             
-            lower_bound = MHT_prob.quantile((100 - ci) / 200, dim="posterior_samples", skipna=True) # this gives 2.5 for 95% CI
-            upper_bound = MHT_prob.quantile(1 - (100 - ci) / 200, dim="posterior_samples", skipna=True) # this gives 97.5 for 95% CI
+        if time_mean:
+            mht_time_mean = MHT.mean(dim="TIME", skipna=True)
+            mht_time_std = MHT.std(dim="TIME", skipna=True)
             
-            lower_bound = lower_bound.mean(dim="TIME", skipna=True)
-            upper_bound = upper_bound.mean(dim="TIME", skipna=True)
+            mht_time_mean = _name(mht_time_mean, "MHT time mean")
+            mht_time_std = _name(mht_time_std, "MHT time std")
             
-            lower_bound = _name(lower_bound, f"MHT {ci}% CI lower")
-            upper_bound = _name(upper_bound, f"MHT {ci}% CI upper")
-            if printout:
-                print(f"{ci}% CI: {(100 - ci) / 200*100}% - {100 - (100 - ci) / 200*100}%")
-            statistics_results["ci"] = np.array([mht_mean - lower_bound, upper_bound - mht_mean])
+            statistics_results["time_mean"] = mht_time_mean
+            statistics_results["time_std"] = mht_time_std
+        
         
     # Anomalies
     mht_anom = None
@@ -98,6 +105,8 @@ def MHT_selection(
         mht_anom = _name(mht_anom, "MHT anomalies")
 
     # Latitude selection (applied to anomalies if available, else raw MHT)
+    statistics_results_lat = {}
+
     MHT_lat = None
     if one_band_sel:
         if lat is None:
@@ -106,29 +115,26 @@ def MHT_selection(
         lat_idx = np.argmin(np.abs(lats - lat))
         
         # Keep posterior samples for CI/distribution at this latitude
-        MHT_lat_prob = MHT_prob.isel(lat=lat_idx)   # shape: (TIME, posterior_samples)
-        MHT_lat      = MHT.isel(lat=lat_idx)         # shape: (TIME,) — mean over samples
+        MHT_lat_prob = MHT.isel(lat=lat_idx)   # shape: (TIME, posterior_samples)
+        MHT_lat = MHT_lat_prob
+        MHT_lat_mean      = MHT.isel(lat=lat_idx).mean(dim="posterior_samples", skipna=True) # shape: (TIME,) — mean over samples
+        MHT_lat_std = MHT.isel(lat=lat_idx).std(dim="posterior_samples", skipna=True) 
         
         MHT_lat_anom = mht_anom.isel(lat=lat_idx) if anomalies else None
 
         MHT_lat      = _name(MHT_lat, f"MHT lat {lat_labels[lat_idx]}")
-        MHT_lat_prob = _name(MHT_lat_prob, f"MHT lat prob {lat_labels[lat_idx]}")
 
+        statistics_results_lat["mean"] = MHT_lat_mean
+        statistics_results_lat["std"] = MHT_lat_std
+        
         # CI for this specific latitude
         if ci:
-            lower = MHT_lat_prob.quantile((100 - ci) / 200, dim="posterior_samples", skipna=True)
-            upper = MHT_lat_prob.quantile(1 - (100 - ci) / 200, dim="posterior_samples", skipna=True)
-            
-            # time-mean CI bounds
-            lower_tmean = lower.mean(dim="TIME", skipna=True)
-            upper_tmean = upper.mean(dim="TIME", skipna=True)
-            lat_mean    = MHT_lat.mean(dim="TIME", skipna=True)
-            
-            lat_ci = np.array([lat_mean - lower_tmean, upper_tmean - lat_mean])
-
+            lat_ci = calc_ci(MHT_lat_prob, 90)
+            statistics_results_lat["ci"] = lat_ci
         if anomalies:
             MHT_lat_anom = _name(MHT_lat_anom, f"MHT lat anom {lat_labels[lat_idx]}")
-            
+            statistics_results_lat["anom"] = MHT_lat_anom
+
             
     if trend:
         # compute the trend for the dataset over time
@@ -143,11 +149,11 @@ def MHT_selection(
 
     return {
         "lats"         : lats,
-        "MHT"          : MHT,
+        "MHT"          : MHT, # no means just drop Nan
+        "MHT_statistics": statistics_results,
         "MHT_anom"     : mht_anom,
         "MHT_lat"      : MHT_lat,
-        "MHT_lat_prob" : MHT_lat_prob if one_band_sel else None,   # full distribution
-        "MHT_lat_ci"   : lat_ci       if one_band_sel and ci else None,  # CI at this lat
-        "MHT_lat_anom" : MHT_lat_anom if anomalies else None,
-        "MHT_statistics": statistics_results
+        "MHT_lat_statistics"   : statistics_results_lat if one_band_sel and ci else None, 
     }
+    
+    
