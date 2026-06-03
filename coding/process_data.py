@@ -1,5 +1,6 @@
 import numpy as np
 import xarray as xr
+import os
 # # plottng
 import cmocean as cmo
 import matplotlib.pyplot as plt
@@ -227,16 +228,15 @@ def plot_hovmöller(mht_data, lats, anomalies=False, cmap="bwr", vmin=None, vmax
 
     plt.grid(alpha=0.15, linestyle='-', color="black")
     if savefig:
-    
-        plt.savefig(f"figures/{savelabel}", dpi=300, bbox_inches='tight')
+        os.makedirs("figures/hovmöller", exist_ok=True)
+        plt.savefig(f"figures/hovmöller/{savelabel}", dpi=300, bbox_inches='tight')
     plt.show()
     
     
 def plot_crosscorr(data, lats, lat_labels, cmap, savefig=False):
     corr_matrix = np.corrcoef(data.values)  # (lat, lat)
-    
     fig = plt.figure(figsize=(8, 6))
-    plt.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=0, vmax=1)
+    plt.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
     plt.colorbar(label='Correlation Coefficient')
     plt.xticks(lats, lat_labels, rotation=45)
     plt.yticks(lats, lat_labels)
