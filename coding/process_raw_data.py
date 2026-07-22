@@ -14,7 +14,7 @@ import matplotlib.patches as mpatches
 # import cartopy.feature as cfeature
 
 # import scipy
-# import scipy.stats as stats
+import scipy.stats as stats
 
 # from scipy.stats import pearsonr
 # from amocatlas import read

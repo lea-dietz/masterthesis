@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 .env
+coding/data/Bayesian_estimates_Atlantic_MHT_HTC_HF_OHC.nc
+coding/liu22/DEEP-C_Fmass_v5_198501-201711.nc
