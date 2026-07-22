@@ -1,5 +1,6 @@
 import numpy as np
 import xarray as xr
+import pandas as pd
 import os
 # # plottng
 import cmocean as cmo
@@ -14,7 +15,8 @@ import matplotlib.patches as mpatches
 # import cartopy.feature as cfeature
 
 # import scipy
-import scipy.stats as stats
+from scipy import signal, stats
+
 
 # from scipy.stats import pearsonr
 # from amocatlas import read
@@ -39,14 +41,110 @@ def calc_ci(data, ci=90):
         upper_err = upper - data_mean   # distance above mean
 
         return np.array([lower_err, upper_err])    
+  
+
+def decimal_year_to_datetime(decimal_year):
+    decimal_year = np.asarray(decimal_year)
+    year = np.floor(decimal_year).astype(int)
+    remainder = decimal_year - year
+
+    start_of_year = pd.to_datetime(year.astype(str) + '-01-01')
+    start_of_next_year = pd.to_datetime((year + 1).astype(str) + '-01-01')
+    year_length = start_of_next_year - start_of_year
+
+    return start_of_year + remainder * year_length
 
 
-def lowpass_filter(data, method="4q-rollingmean"):
-    # 4-quarter running mean filter
-    data_smooth = data.rolling(TIME=4, center=True, min_periods=4).mean()
-    data_smooth = data_smooth.dropna(dim="TIME", how="any")
+def detrend_dataset(ds):
+    return xr.apply_ufunc(
+        signal.detrend, ds, kwargs={"axis": -1},
+        input_core_dims=[["time"]],
+        output_core_dims=[["time"]]
+    )
+    
+def apply_filtfilt(data, b, a):
+    return signal.filtfilt(b, a, data, axis=-1)
 
-    return data_smooth    
+def butterworth_filter(ds, cutoff=1/1.5, fs=4):
+    b, a = signal.butter(
+        4,
+        cutoff,
+        btype="low",
+        fs=fs
+    )
+    return xr.apply_ufunc(
+        apply_filtfilt, ds, kwargs={'b': b, 'a': a},
+        input_core_dims=[['time']], output_core_dims=[['time']],
+        vectorize=True
+    )
+    
+def lowpass_filter(data, method="butter", cutoff=1/1):
+    if method == "rolling":
+        # 4-quarter running mean filter
+        data_smooth = data.rolling(TIME=4, center=True, min_periods=4).mean()
+        data_smooth = data_smooth.dropna(dim="TIME", how="any")
+    elif method == "butter":
+        data_smooth = butterworth_filter(data, cutoff=cutoff)
+        
+    return data_smooth  
+    
+def process_data(ds, anomalies=False, anomalies_detrended=False):
+    # 1. deseasonalize
+    seasonal_cim = ds.groupby("time.quarter").mean(dim="time")
+    anom = ds.groupby("time.quarter") - seasonal_cim
+    if anomalies:
+        return anom
+    # 2. detrend
+    anom_detrended = detrend_dataset(anom)
+    if anomalies_detrended:
+        return anom_detrended
+    # 3. lowpass filter
+    # CHOOSE method: butterworth filter (butter) or rolling mean (rolling)
+    
+    data_filtered = lowpass_filter(anom_detrended, method="butter", cutoff=1/1)
+    
+    return data_filtered
+
+
+def plot_filter_response(cutoff=1/1.5, fs=4, order=4, worN=2000,
+                         its_period_range=(0.7, 3)):
+    """
+    Plot the frequency response of the Butterworth filter used in `butterworth_filter`,
+    for both single-pass and zero-phase (filtfilt) application.
+    """
+    b, a = signal.butter(order, cutoff, btype="low", fs=fs)
+    w, h = signal.freqz(b, a, worN=worN, fs=fs)
+
+    H2_singlepass = np.abs(h) ** 2
+    # h2 is the fravtion of power that survives at a given frequency f , that if not low pass filtered here
+    # goes from 0 - 1, 0 fill blocked, 1 fully passed
+    H2_filtfilt = H2_singlepass ** 2  # filtfilt = forward+backward -> response squared
+
+    its_min_period, its_max_period = its_period_range
+    its_freq_low = 1 / its_max_period   # longer period -> lower frequency
+    its_freq_high = 1 / its_min_period  # shorter period -> higher frequency
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.loglog(w, H2_singlepass, label=f'Butterworth, single-pass (order {order})')
+    # ax.loglog(w, H2_filtfilt, label=f'Butterworth, zero-phase / filtfilt (eff. order {2*order})')
+    ax.axhline(0.5, color='gray', linestyle=':',alpha=0.7, label='half-power point')
+    # cutoff
+    ax.axvline(cutoff, color='black', linestyle='--', alpha=0.8,
+                              label=f'cutoff = {cutoff:.3f} cyc/yr ({1/cutoff:.2g} yr period)')
+    # ITS period band -> frequency band
+    ax.axvline(its_freq_low, color='green', linestyle=':', alpha=0.8,
+               label=f'ITS band: {its_max_period}yr -> {its_freq_low:.3f} cyc/yr')
+    ax.axvline(its_freq_high, color='orange', linestyle=':', alpha=0.8,
+               label=f'ITS band: {its_min_period}yr -> {its_freq_high:.3f} cyc/yr')
+    ax.axvspan(its_freq_low, its_freq_high, color='green', alpha=0.1)
+
+    ax.set_xlabel(f'frequency (cycles per year, fs={fs})')
+    ax.set_ylabel(r'$|H(f)|^2$')
+    ax.set_title(f'Butterworth low-pass response (cutoff={cutoff:.3g}, fs={fs})')
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+    return fig, ax
 
 def MHT_selection(
         ds,
