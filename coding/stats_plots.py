@@ -132,7 +132,7 @@ def plot_timeseries(
                 ts.plot(ax=ax, label=full_label, color=color, linestyle=ls, linewidth=2, zorder=zorder_item)
         zorder_item += 1
 
-    ax.set_title(title or f"MHT anomalies timeseries {label} latitude(s)")
+    ax.set_title(f"{title} timeseries {label} latitude(s)")
     ax.set_xlabel("Year" if not show_trend else "Time")
     ax.set_ylabel("MHT anomaly (PW)")
     if ylim is not None:
@@ -236,35 +236,42 @@ def critical_r(n_eff, alpha=0.05):
 #########################
 
    
-def plot_hovmöller(mht_data, lats, anomalies=False, cmap="bwr", vmin=None, vmax=None, savefig=False):
+def plot_hovmöller(data,
+                lats, lat_labels, 
+                data_label="MHT",
+                anomalies=False, 
+                cmap="bwr",
+                vmin=None, vmax=None, 
+                savefig=False
+    ):
     """
     Plot the MHT (can be anomalies or raw) as a function of time and latitude using a colormap.
     """
-    time_name = "time" if "time" in mht_data.dims else "TIME"
+    time_name = "time" if "time" in data.dims else "TIME"
     
-    if isinstance(mht_data, dict):
-        MHT = mht_data["MHT_statistics"]["mean"] # this is mean over posterior samples!
+    if isinstance(data, dict):
+        MHT = data["MHT_statistics"]["mean"] # this is mean over posterior samples!
     else:
         # asume its the mht mean over post samples
-        MHT = mht_data
+        MHT = data
     # for anomalies
     # mht_all_mean = MHT_dict["MHT_statistics"]["time_mean"].mean(dim="posterior_samples") # this is time mean and over posterior samples mean
 
-    fig, ax = plt.subplots(figsize=(9.5, 7))
+    fig, ax = plt.subplots(figsize=(16, 7))
 
     if anomalies:
     #     # cmap = "bwr"
     #     # Anomaly = value - mean
     #     anom = MHT - mht_all_mean#.mean(dim="lat") # get overall mean over all latitudes!
-        vmin = np.nanmin(mht_data.values)
-        vmax = np.nanmax(mht_data.values)
+        vmin = np.nanmin(data.values)
+        vmax = np.nanmax(data.values)
         limit = max(abs(vmin), abs(vmax))
         vmin = -limit #- 0.5
         vmax = limit #+ 0.5
-        mesh = ax.pcolormesh(MHT[time_name], lats ,mht_data.values, shading='auto', cmap=cmap, vmin=vmin, vmax=vmax)
-        plt.colorbar(mesh, label='MHT Anomaly from Mean (PW)')
-        plt.title('Meridional Heat Transport Anomalies (MHT)')
-        savelabel = "mht_time_lat_anomalies.png"
+        mesh = ax.pcolormesh(MHT[time_name], lats ,data.values, shading='auto', cmap=cmap, vmin=vmin, vmax=vmax)
+        plt.colorbar(mesh, label=f'{data_label} anomalies (PW)', extend="both")
+        plt.title(f'{data_label} Anomalies')
+        savelabel = f"{data_label}_time_lat_anomalies.png"
 
     else:
         if vmin is None and vmax is None:
@@ -273,19 +280,25 @@ def plot_hovmöller(mht_data, lats, anomalies=False, cmap="bwr", vmin=None, vmax
             limit = max(abs(vmin), abs(vmax))
             vmin = -limit 
             vmax = limit 
-        
+    
         mesh = ax.pcolormesh(MHT[time_name], lats, MHT.values, shading='auto', cmap=cmap, vmin=vmin, vmax=vmax)
-        plt.colorbar(mesh, label='MHT (PW)')
-        plt.title('Meridional Heat Transport  (MHT)')
-        savelabel = "mht_time_lat.png"
+        plt.colorbar(mesh, label=f'{data_label} (PW)', extend="both")
+        plt.title(f'{data_label}')
+        savelabel = f"{data_label}_time_lat.png"
 
-    ytick_pos    = [-35, -25, -11, -5,  5,  16, 26, 35, 45, 55, 60]
-    ytick_labels = ["35S","25S","11S","5S","5N","16N","26N","35N","45N","55N","60N"]
-    ax.set_yticks(ytick_pos)
-    ax.set_yticklabels(ytick_labels)
-    ax.set_xlabel('Time')        
+    ytick_labels = [label.replace(".0", "") for label in lat_labels]
 
-    plt.grid(alpha=0.15, linestyle='-', color="black")
+    if np.all(np.diff(lats) < 0):      # decreasing, e.g. 60 -> -35
+        ax.set_yticks(lats[::-1])
+        ax.set_yticklabels(ytick_labels[::-1])
+    else:                              # increasing, e.g. 0 -> 10 (region indices, 0 = north)
+        ax.set_yticks(lats)
+        ax.set_yticklabels(ytick_labels)   # keep original order — matches data row order
+        ax.invert_yaxis() 
+        
+    ax.set_xlabel('Time')   
+    ax.set_ylabel("Latitude")     
+
     if savefig:
         os.makedirs("figures/hovmöller", exist_ok=True)
         plt.savefig(f"figures/hovmöller/{savelabel}", dpi=300, bbox_inches='tight')
