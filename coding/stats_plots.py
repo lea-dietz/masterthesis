@@ -17,11 +17,20 @@ from statsmodels.tsa.stattools import ccf
 #####
 # get dim name
 def get_lat_name(ds):
-    for name in ("lat", "LATITUDE", "latitude", "LAT"):
+    for name in ("lat", "LATITUDE", "latitude", "LAT", "number_regions"):
         if name in ds.coords or name in ds.dims:
             return name
     raise ValueError(f"No latitude coordinate found. Available: {list(ds.coords)}")
 
+## to change label name into float
+def parse_lat_label(label):
+    """'55°N' -> 55.0, '25°S' -> -25.0"""
+    if "N" in label:
+        label = label.replace("°N", "")
+    elif "S" in label:
+        label = label.replace("°S", "")
+        label = "-" + label 
+    return float(label)
 
 #########################
 #### plot timeseries ####
@@ -231,6 +240,92 @@ def critical_r(n_eff, alpha=0.05):
     return r_crit
 
 
+   
+def compute_n_eff_and_r_crit(
+        data,
+        coord_values, # lats
+        coord_labels, # lats labels for mht
+        dim,
+        del_t,
+        time_unit,
+        plateau_values=None,
+        plot=False):
+
+    N = data.sizes["time"]
+    print(f"Total number of samples: {N}")
+
+    n_effs = {}
+    its_dict = {}
+
+    if plateau_values is None:
+        plateau_values = []
+
+    for idx, value in enumerate(coord_values):
+
+        ts = data.isel({dim: idx})
+
+        # if value in plateau_values:
+        #     method = "plateau"
+        # else:
+        method = "0cross"
+
+        its, max_lags = integral_time_scale(ts, del_t=del_t, method=method)
+
+        N_eff = N * del_t / its
+        n_effs[value] = N_eff
+        its_dict[value] = its
+
+        print(
+            f"{coord_labels[idx]}: ITS = {its:.2f} {time_unit}, "
+            f"N_eff = {N_eff:.1f}"
+        )
+
+        if plot:
+            acf_calc_plot(
+                ts,
+                N_eff=12,
+                plot=True,
+                title=f"Autocorrelation at {coord_labels[idx]}"
+            )
+
+    r_crits = {value: critical_r(neff) for value, neff in n_effs.items()}
+    
+    return n_effs, r_crits, its_dict
+
+
+def significance_mask(data, ref_lats, lats, all_lags, nlags, r_crits):
+    corr_matrix = np.full((len(lats), len(all_lags)), np.nan)
+
+    for ref_lat in ref_lats:
+
+        ref_idx = np.argmin(np.abs(lats - ref_lat))
+        ts_ref = data.isel(lat=ref_idx).values
+
+        corr_matrix = np.full((len(lats), len(all_lags)), np.nan)
+        significance_mask = np.zeros((len(lats), len(all_lags)), dtype=bool)
+
+        r_ref = r_crits[ref_lat]
+
+        for i, lat in enumerate(lats):
+
+            ts = data.isel(lat=i).values
+
+            pos_corr, _ = ccf(ts_ref, ts, nlags=nlags, alpha=0.05)
+            neg_corr, _ = ccf(ts, ts_ref, nlags=nlags, alpha=0.05)
+
+            full_corr = np.concatenate([neg_corr[1:][::-1], pos_corr])
+            corr_matrix[i, :] = full_corr
+
+            r_lat = r_crits[lat]
+
+            # use the smaller effective sample size (larger critical r)
+            r_crit = max(r_ref, r_lat)
+            print(f"for ref lat: {ref_lat} and {lat}: r crit = {r_crit:.2f}")
+
+            significance_mask[i, :] = np.abs(full_corr) >= r_crit
+        
+    return significance_mask
+            
 #########################
 # Plotting   functions ##
 #########################
@@ -330,13 +425,18 @@ def plot_crosscorr(
                 r_crit   = critical_r(min_neff)
                 significance_mask[i, j] = np.abs(corr_matrix[i, j]) >= r_crit
 
-        masked = np.where(~significance_mask, 1, np.nan)
-        ax.pcolormesh(lats, lats, masked, cmap=mcolors.ListedColormap(['white']), alpha=0.5)
+        sig_rows, sig_cols = np.where(significance_mask)   
+        sig_x = lats[sig_cols]
+        sig_y = lats[sig_rows]
+
+        ax.scatter(sig_x, sig_y, marker='x', color='black', s=40, linewidths=1.2)
+        
         if savename is None:
             savename = "mht_correlation_latlat_significant.png"
     else:
         if savename is None:
             savename = "mht_correlation_latlat.png"
+            
     plt.xticks(lats, lat_labels, rotation=45)
     plt.yticks(lats, lat_labels)
     plt.xlabel('Latitude (°N)')
@@ -375,8 +475,11 @@ def plot_crosscorr_gif(
                 r_crit = critical_r(min_neff)
                 significance_mask[i, j] = np.abs(corr_matrix[i, j]) >= r_crit
 
-        masked = np.where(~significance_mask, 1, np.nan)
-        ax.pcolormesh(lats, lats, masked, cmap=mcolors.ListedColormap(['white']), alpha=0.5)
+        sig_rows, sig_cols = np.where(significance_mask)  
+        sig_x = lats[sig_cols]
+        sig_y = lats[sig_rows]
+
+        ax.scatter(sig_x, sig_y, marker='x', color='black', s=40, linewidths=1.2)
 
     ax.set_xticks(lats)
     ax.set_xticklabels(lat_labels, rotation=45)
@@ -395,6 +498,60 @@ def plot_crosscorr_gif(
 
     return ax
 
+def plot_crosscorr_hf_mht(
+    corr_matrix,          # (n_regions, n_mht_lats), already computed
+    region_info,    # dict of idx, labels, regions 
+    lats, lat_labels,      # MHT latitudes/labels
+    cmap,
+    significance=False,
+    n_effs_hf=None,        # dict: region_bounds -> N_eff (or region label -> N_eff)
+    n_effs_mht=None,       # dict: lat -> N_eff
+    title='Cross-Correlation of HF regions vs MHT',
+    savefig=False, savename=None):
+    
+    region_y = region_info["idx"]
+    region_labels = region_info["labels"]
+    region_bounds = region_info["bounds"]
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    cf = ax.pcolormesh(lats, region_y, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
+    plt.colorbar(cf, ax=ax, label='Correlation Coefficient')
+
+    if significance:
+        significance_mask = np.zeros_like(corr_matrix, dtype=bool)
+        for i in region_y:
+            for j, lat_j in enumerate(lats):
+                min_neff = min(n_effs_hf[i], n_effs_mht[lat_j])
+                r_crit = critical_r(min_neff)
+                significance_mask[i, j] = np.abs(corr_matrix[i, j]) >= r_crit
+
+        sig_rows, sig_cols = np.where(significance_mask)   # row = region idx, col = lat idx
+        sig_x = lats[sig_cols]
+        sig_y = region_y[sig_rows]
+
+        ax.scatter(sig_x, sig_y, marker='x', color='black', s=40, linewidths=1.2)
+        
+        if savename is None:
+            savename = "hf_mht_correlation_significant.png"
+    else:
+        if savename is None:
+            savename = "hf_mht_correlation.png"
+
+    ax.set_xlabel('MHT Latitude (°N)')
+    ax.set_xticks(lats)
+    ax.set_xticklabels(lat_labels, rotation=45)
+    
+    ax.set_ylabel('HF Region')
+    ax.set_yticks(region_y)
+    ax.set_yticklabels(region_labels)
+    ax.invert_yaxis() # invert y axis since regions are from 0 = north to 10 = south always
+    ax.set_title(title)
+
+    if savefig:
+        os.makedirs("figures/cross_corr", exist_ok=True)
+        plt.savefig(f"figures/cross_corr/{savename}", dpi=300, bbox_inches='tight')
+    plt.show()
+    
 def zero_lag_corr(ts1, ts2, lats, lat_labels, dimension="TIME", plot=False, savefig=False, polar_band=True, title=None):
     """
     Compute the zero-lag Pearson correlation coefficient between two time series and plot the result as a function of latitude.
@@ -507,14 +664,65 @@ def zero_lag_corr_regions(
         ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
 
         ax.set_title(title if title else f"0-lag correlation: MHT {lat_labels[lat_idx]} vs Heat Flux by region")
-
+        if np.all(np.diff(x_vals) < 0):      # decreasing, e.g. 60 -> -35
+            ax.set_xticks(x_vals[::-1])
+            # ax.set_yticklabels(ytick_labels[::-1])
+        else:                              # increasing, e.g. 0 -> 10 (region indices, 0 = north)
+            ax.set_xticks(x_vals)
+            ax.set_xticklabels(x_vals)   # keep original order — matches data row order
+            ax.invert_xaxis() 
+            
         if savefig:
             os.makedirs("figures/0lag", exist_ok=True)
             plt.savefig("figures/0lag/corr_mht_hf_regions.png", dpi=300, bbox_inches='tight')
         plt.show()
 
     return corr
-    
+
+
+def zero_lag_corr_hf_mht(
+        hf_region, mht,
+        region_bounds, # like (16, 26) the boundaries for hf region  
+        dimension="time",
+        lats=None, lat_labels=None,
+        plot=False, 
+        savefig=False, 
+        title=None,
+    ):
+    """
+    Compute the zero-lag Pearson correlation coefficient between two time series.
+    """
+    corr = xr.corr(hf_region, mht, dim=dimension)
+
+    if plot:
+        fig, ax = plt.subplots()
+        
+        x_vals = lats
+        ax.plot(x_vals, corr.values, marker='o')
+        
+        # shade the latitude span this HF region actually covers
+        lower, higher = min(region_bounds), max(region_bounds)
+        ax.axvspan(lower, higher, color='orange', alpha=0.2)
+
+        ax.set_xticks(lats if lats is not None else x_vals)
+        if lat_labels is not None:
+            ax.set_xticklabels(lat_labels, rotation=45)
+        ax.set_xlabel("MHT Latitude (°N)")
+        ax.set_ylabel("Correlation Coefficient")
+        ax.set_ylim(-1, 1)
+        ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+        ax.legend()
+        ax.set_title(title or f"HF {region_bounds} vs MHT (all latitudes)", y=1.02)
+
+        if savefig:
+            os.makedirs("figures/0lag", exist_ok=True)
+            plt.savefig(f"figures/0lag/corr_hf_region_{lower}_{higher}_vs_mht.png", dpi=300, bbox_inches='tight')
+        plt.show()
+
+    return corr
+
+
+
 def plot_shifted_timeseries(ds, ref_lat, lats, all_lats, lat_labels, colors, timedelta=6, label="specific", savefig=False, ylim=None):
     # ylim should be a tuple
     time_name = "time" if "time" in ds.dims else "TIME"
