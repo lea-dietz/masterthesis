@@ -45,11 +45,15 @@ def plot_timeseries(
     label="specific",
     title=None,
     ylim=None,
+    xlim=None,
     show_trend=False,
+    grid=False,
+    annotate_x=None,
     timescale="years",
     lat_dim="lat",
     time_dim="time",
     savefig=False,
+    savelabel="mht",
     ):
     """
     Plot MHT (or anomaly) time series per latitude, with optional linear trend overlay.
@@ -74,6 +78,7 @@ def plot_timeseries(
         Overrides the auto-generated title.
     ylim : tuple, optional
         (ymin, ymax).
+    xlim : same as ylim
     show_trend : bool
         If True, fit and overlay a linear trend per latitude (dashed line, slope in legend).
     timescale : str
@@ -135,27 +140,38 @@ def plot_timeseries(
                 ax.plot(
                     da[time_dim], trend,
                     label=f"{full_label}, slope: {slope:.0e} PW/{slope_unit}",
-                    color=color, linestyle=ls, zorder=5, linewidth=2,
+                    color=color, linestyle=ls, zorder=5, linewidth=3,
                 )
             else:
-                ts.plot(ax=ax, label=full_label, color=color, linestyle=ls, linewidth=2, zorder=zorder_item)
+                ts.plot(ax=ax, label=full_label, color=color, linestyle=ls, linewidth=3, zorder=zorder_item)
         zorder_item += 1
 
-    ax.set_title(f"{title} timeseries {label} latitude(s)")
+    ax.set_title(f"{title} {label}")
     ax.set_xlabel("Year" if not show_trend else "Time")
-    ax.set_ylabel("MHT anomaly (PW)")
+    ax.set_ylabel(f"{savelabel.title()} anomaly (PW)")
     if ylim is not None:
         ax.set_ylim(*ylim)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
     ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
     plt.tight_layout()
-
+    if grid: 
+        plt.grid(alpha=0.5, linestyle="--")
+    if annotate_x is not None:
+        ax.annotate(
+            'phase shift',
+            xy=(annotate_x, 0), xycoords=('data', 'data'),
+            xytext=(annotate_x, ax.get_ylim()[0]*0.8),
+            arrowprops=dict(facecolor='red', shrink=0.05, width=2, headwidth=8),
+            fontsize=10, color='red', ha='center'
+        )
     if savefig:
         os.makedirs("figures/timeseries/anomalies/", exist_ok=True)
-        plt.savefig(f"figures/timeseries/anomalies/calafat_timeseries_{label}.png",
+        plt.savefig(f"figures/timeseries/anomalies/{savelabel}_timeseries_{label}.png",
                     dpi=300, bbox_inches='tight')
 
-    plt.show()
+    #plt.show()
 
     return fig, ax
 
@@ -411,10 +427,10 @@ def plot_crosscorr(
     savefig=False, savename=None):
     corr_matrix = np.corrcoef(data.values)  # (lat, lat)
     
-    fig, ax  = plt.subplots(figsize=(8, 6))
+    fig, ax  = plt.subplots(figsize=(8, 10))
     
     cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
-    plt.colorbar(cf, ax=ax, label='Correlation Coefficient')
+    plt.colorbar(cf, ax=ax, label='Correlation Coefficient', orientation='horizontal', location="bottom")
     
     # put significance mask when wanted:
     if significance:
