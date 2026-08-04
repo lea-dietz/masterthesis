@@ -1,11 +1,14 @@
 
 import numpy as np
 import xarray as xr
+import pandas as pd
 import os
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
+import matplotlib.lines as mlines
+import matplotlib.dates as mdates
 
 import scipy.stats as stats
 from scipy.stats import t as t_dist
@@ -147,6 +150,11 @@ def plot_timeseries(
         zorder_item += 1
 
     ax.set_title(f"{title} {label}")
+    ax = plt.gca()  # or whatever your axis variable is
+
+    ax.xaxis.set_major_locator(mdates.YearLocator())        # tick only at each year
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))  # show only the year number
+    
     ax.set_xlabel("Year" if not show_trend else "Time")
     ax.set_ylabel(f"{savelabel.title()} anomaly (PW)")
     if ylim is not None:
@@ -424,14 +432,22 @@ def plot_crosscorr(
     significance=False,
     n_effs=None,
     title='Cross-Correlation of MHT anomalies', 
-    savefig=False, savename=None):
+    cbar_orientation='vertical', cbar_location='left',
+    savefig=False, savename=None
+    ):
     corr_matrix = np.corrcoef(data.values)  # (lat, lat)
     
-    fig, ax  = plt.subplots(figsize=(8, 10))
+    
+    fig, ax  = plt.subplots(figsize=(8, 6))
     
     cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
-    plt.colorbar(cf, ax=ax, label='Correlation Coefficient', orientation='horizontal', location="bottom")
-    
+    if cbar_orientation == 'horizontal':
+        cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient', orientation=cbar_orientation, location=cbar_location)
+    else:
+        cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient')
+    cb.set_ticks([-1, -0.5, 0, 0.5, 1])
+    cb.set_ticklabels(['-1', '-0.5', '0', '+0.5', '+1'])
+
     # put significance mask when wanted:
     if significance:
         significance_mask = np.zeros_like(corr_matrix, dtype=bool)
@@ -455,8 +471,8 @@ def plot_crosscorr(
             
     plt.xticks(lats, lat_labels, rotation=45)
     plt.yticks(lats, lat_labels)
-    plt.xlabel('Latitude (°N)')
-    plt.ylabel('Latitude (°N)')
+    plt.xlabel('Latitude')
+    plt.ylabel('Latitude')
     plt.title(title)
     if savefig:
         plt.savefig(f"figures/cross_corr/{savename}", dpi=300, bbox_inches='tight')
@@ -481,7 +497,9 @@ def plot_crosscorr_gif(
         fig = ax.figure
 
     cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
-    fig.colorbar(cf, ax=ax, label='Correlation Coefficient')
+    cb = fig.colorbar(cf, ax=ax, label='Correlation Coefficient')
+    cb.set_ticks([-1, -0.5, 0, 0.5, 1])
+    cb.set_ticklabels(['-1', '-0.5', '0', '+0.5', '+1'])
 
     if significance:
         significance_mask = np.zeros_like(corr_matrix, dtype=bool)
@@ -501,8 +519,8 @@ def plot_crosscorr_gif(
     ax.set_xticklabels(lat_labels, rotation=45)
     ax.set_yticks(lats)
     ax.set_yticklabels(lat_labels)
-    ax.set_xlabel('Latitude (°N)')
-    ax.set_ylabel('Latitude (°N)')
+    ax.set_xlabel('Latitude')
+    ax.set_ylabel('Latitude')
     ax.set_title(title)
 
     if owns_fig:
@@ -822,3 +840,231 @@ def lagged_std(ds, ref_lat1, ref_lat2, timedelta=4, max_lag=None, normalize=Fals
     
     return x, y, lags, stds
 
+
+def _plot_one_ref(
+    ax, ref_idx, ds_ref, ds_target, n_effs_ref, n_effs_target,
+    region_labels, all_lags, nlags, lag_units, significance, cmap,
+    boundary_labels=None,   # NEW: list of n_target+1 latitude boundary labels, e.g. ["65°N","60°N",...,"35°S"]
+):
+    ts_ref = ds_ref.isel(number_regions=ref_idx).values
+    n_eff_ref = n_effs_ref[ref_idx]
+
+    n_target = ds_target.sizes["number_regions"]
+    y_pos = np.arange(n_target)
+
+    corr_matrix = np.full((n_target, len(all_lags)), np.nan)
+    significance_mask = np.zeros((n_target, len(all_lags)), dtype=bool)
+
+    for i in range(n_target):
+        ts = ds_target.isel(number_regions=i).values
+
+        pos_corr, _ = ccf(ts_ref, ts, nlags=nlags, alpha=0.05)
+        neg_corr, _ = ccf(ts, ts_ref, nlags=nlags, alpha=0.05)
+        lag0_corr = np.corrcoef(ts_ref, ts)[0, 1]
+
+        full_corr = np.concatenate([neg_corr[::-1], [lag0_corr], pos_corr])
+        corr_matrix[i, :] = full_corr
+
+        n_eff_target = n_effs_target[i]
+        min_n_eff = min(n_eff_ref, n_eff_target)
+        r_crit = critical_r(min_n_eff)
+        significance_mask[i, :] = np.abs(full_corr) >= r_crit
+
+    lag_edges = np.arange(-nlags - 0.5, nlags + 1.5, 1)  # edges between lag columns
+    y_edges = np.arange(-0.5, n_target + 0.5, 1)          # edges between region rows
+
+    cf = ax.pcolormesh(-lag_edges, y_edges, corr_matrix, cmap=cmap, vmin=-1, vmax=1, shading='flat')
+
+    if significance:
+        sig_rows, sig_cols = np.where(significance_mask)
+        sig_x = -all_lags[sig_cols]
+        sig_y = y_pos[sig_rows]
+        ax.scatter(sig_x, sig_y, marker='x', color='black', s=15, linewidths=0.8)
+
+    ax.axhspan(ref_idx - 0.5, ref_idx + 0.5, facecolor='none',
+               edgecolor='red', linewidth=1.5, zorder=5)
+    ax.axvline(0, color='white', linewidth=0.8, linestyle='--')
+
+    # --- boundary-based y ticks instead of region-center ticks ---
+    if boundary_labels is not None:
+        boundary_pos = np.arange(-0.5, n_target + 0.5, 1)  # n_target+1 edge positions
+        ax.set_yticks(boundary_pos)
+        ax.set_yticklabels(boundary_labels)
+    else:
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(region_labels)
+
+    ax.invert_yaxis()
+
+    if lag_units == "months":
+        xticks = np.arange(all_lags[0], all_lags[-1] + 1, max(2, nlags // 6))
+        xticklabels = xticks.astype(str)
+    else:
+        lag_step = 4
+        xticks = np.arange(-nlags, nlags + 1, lag_step)
+        xticklabels = (xticks // lag_step).astype(str)
+
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xticklabels)
+
+    ref_label = region_labels[ref_idx] if ref_idx < len(region_labels) else str(ref_idx)
+
+    ax.annotate(f'← ref lags', xy=(0.20, -0.1), xycoords='axes fraction',
+                ha='center', va='top')
+    ax.annotate(f'ref leads →', xy=(0.80, -0.1), xycoords='axes fraction',
+                ha='center', va='top')
+
+    ax.set_ylabel('HF band')
+    ax.set_title(f'HTC ref band {ref_label}')
+
+    return cf
+
+def plot_lead_lag_regions(
+    ds_ref, ds_target, n_effs_ref, n_effs_target,
+    region_labels=None, nlags=24, time_unit="months",
+    significance=True, cmap=None, savefig=False,
+    savename_prefix="lag_corr_regions", boundary_labels=None
+):
+    n_ref = ds_ref.sizes["number_regions"]
+    n_target = ds_target.sizes["number_regions"]
+
+    if region_labels is None:
+        region_labels = [str(i) for i in range(n_target)]
+
+    all_lags = np.arange(-nlags, nlags + 1)
+    lag_units = "months" if time_unit == "months" else "years"
+
+    n_cols = 4
+    n_rows = int(np.ceil(n_ref / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 6 * n_rows),
+                              sharey=True, sharex=True)
+    axes = np.atleast_1d(axes).flatten()
+
+    cf = None
+    for ref_idx in range(n_ref):
+        cf = _plot_one_ref(
+            axes[ref_idx], ref_idx, ds_ref, ds_target,
+            n_effs_ref, n_effs_target, region_labels,
+            all_lags, nlags, lag_units, significance, cmap,
+            boundary_labels,
+        )
+
+    for j in range(n_ref, len(axes)):
+        axes[j].set_visible(False)
+
+    cbar_ax = fig.add_axes([1.02, 0.15, 0.02, 0.7])
+    fig.colorbar(cf, cax=cbar_ax, label='Correlation')
+
+    ref_handle = mlines.Line2D([], [], color='red', linewidth=1.5, label='Reference region')
+    eq_handle = mlines.Line2D([], [], color='white', linewidth=2, linestyle='--', label='Lag 0')
+    fig.legend(handles=[ref_handle, eq_handle], loc='lower right', fontsize=12)
+
+    fig.supxlabel(f'Lag ({lag_units})', fontsize=14)
+    plt.tight_layout()
+
+    savename = f"{savename_prefix}_significance.png" if significance else f"{savename_prefix}.png"
+    if savefig:
+        os.makedirs("figures/lead_lag", exist_ok=True)
+        plt.savefig(f'figures/lead_lag/{savename}', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return fig, axes
+
+
+def plot_lead_lag_single_region(
+    ds_ref, ds_target, ref_idx, n_effs_ref, n_effs_target,
+    region_labels=None, nlags=24, time_unit="months",
+    significance=True, cmap=None, savefig=False,
+    savename_prefix="lag_corr_single", 
+    boundary_labels=None
+):
+    n_target = ds_target.sizes["number_regions"]
+
+    if region_labels is None:
+        region_labels = [str(i) for i in range(n_target)]
+
+    all_lags = np.arange(-nlags, nlags + 1)
+    lag_units = "months" if time_unit == "months" else "years"
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    cf = _plot_one_ref(
+        ax, ref_idx, ds_ref, ds_target,
+        n_effs_ref, n_effs_target, region_labels,
+        all_lags, nlags, lag_units, significance, cmap, 
+        boundary_labels,
+    )
+
+    fig.colorbar(cf, ax=ax, label='Correlation')
+
+    ref_handle = mlines.Line2D([], [], color='red', linewidth=1.5, label='Reference band')
+    eq_handle = mlines.Line2D([], [], color='white', linewidth=2, linestyle='--', label='Lag 0')
+    ax.legend(handles=[ref_handle, eq_handle], loc='lower right', fontsize=10)
+
+    ax.set_xlabel(f'Lag ({lag_units})')
+    plt.tight_layout()
+
+    savename = f"{savename_prefix}_region{ref_idx}_significance.png" if significance else f"{savename_prefix}_region{ref_idx}.png"
+    if savefig:
+        os.makedirs("figures/lead_lag", exist_ok=True)
+        plt.savefig(f'figures/lead_lag/{savename}', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return fig, ax
+
+
+
+
+def block_coherence_index(
+        mht,
+        r_crits,
+        lat_idx,
+        lats,
+        periods, # dict: period name -> (start time, end time)
+        lat_dim="lat",
+        time_dim="time"):
+    """
+    Calcutes the mean coherence index for a block of latitudes over specified periods.
+    The coherence index is defined as the mean of the pairwise correlation coefficients between latitudes in the block, 
+    after applying a significance threshold based on critical r values.
+    Also only use upper triangle of correlation matrix (without diagonal) to avoid double counting.
+    
+    """
+    # select block from lat idx (0 == 60°N)
+    block = mht.isel({lat_dim: lat_idx})
+    block_lats = lats[lat_idx]
+    
+    results = {}
+    
+    for period_name, (t_start, t_end) in periods.items():
+        
+        period_data = block.sel({time_dim: slice(t_start, t_end)})
+        
+        vals = period_data.transpose(time_dim, lat_dim).values
+        
+        corr_mat = np.corrcoef(vals.T)
+        # shape of corr_mat is (n lats in block , n lats in block)
+        # correlation between each pair lats in block in that time window
+        # Apply significance threshold
+        for i in range(len(block_lats)):
+            for j in range(i+1, len(block_lats)):
+                r_crit = max(r_crits[block_lats[i]], r_crits[block_lats[j]])
+                if np.abs(corr_mat[i, j]) < r_crit:
+                    corr_mat[i, j] = np.nan
+                    corr_mat[j, i] = np.nan
+
+        # triu indices gives upper triangles of matrix, k=1 is offset 1 (without diagonal!)
+        iu = np.triu_indices(len(block_lats), k=1)
+        pair_vals = corr_mat[iu]
+        
+        mean_coherence = np.nanmean(pair_vals) if np.sum(~np.isnan(pair_vals)) >= 2 else np.nan
+        n_valid = np.sum(~np.isnan(pair_vals))
+
+        results[period_name] = {
+            "mean_coherence": mean_coherence,
+            "n_valid_pairs": n_valid,
+            "n_total_pairs": len(pair_vals)
+        }
+        
+        
+    return pd.DataFrame(results).T
