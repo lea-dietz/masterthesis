@@ -9,7 +9,10 @@ import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 import matplotlib.lines as mlines
 import matplotlib.dates as mdates
+import matplotlib.patheffects as pe
 
+
+import cmocean as cmo
 import scipy.stats as stats
 from scipy.stats import t as t_dist
 
@@ -43,15 +46,17 @@ def plot_timeseries(
     lats,
     all_lats=None,
     labels=None,
-    cmap=plt.cm.coolwarm,
+    cmap=plt.cm.Spectral_r,
     linestyles=None,
     label="specific",
+    anomalies=True,
     title=None,
     ylim=None,
     xlim=None,
     show_trend=False,
     grid=False,
     annotate_x=None,
+    loc_legend="upper center",
     timescale="years",
     lat_dim="lat",
     time_dim="time",
@@ -106,8 +111,10 @@ def plot_timeseries(
     lat_to_idx = {l: i for i, l in enumerate(all_lats)}
     if not isinstance(data, dict):
         data = {"data": data}
-    
-    default_styles = ["-", "--", ":", "-."]
+        
+    dataset_colors = {name: cmap(i / max(len(data) - 1, 1)) for i, name in enumerate(data.keys())}
+
+    default_styles = ["-", "-", "-.", ":"]
     if linestyles is None:
         linestyles = {name: default_styles[i % len(default_styles)]
                       for i, name in enumerate(data.keys())}
@@ -129,9 +136,14 @@ def plot_timeseries(
 
         for lat in lats:
             idx = lat_to_idx[lat]
-            color = colors[idx]
+            # color = colors[idx]
+            # here adjust the color for: if dataset has single latitude the different data has different color
+            if len(lats) == 1:
+                color = dataset_colors[name]
+            else:
+                color = colors[idx]
             lat_label = labels[idx] if labels else str(lat)
-            full_label = f"{lat_label} ({name})" if len(data) > 1 else lat_label
+            full_label = name if len(lats) == 1 else (f"{lat_label} ({name})" if len(data) > 1 else lat_label)
             ts = da.isel({lat_dim: idx})
 
             if show_trend:
@@ -143,7 +155,7 @@ def plot_timeseries(
                 ax.plot(
                     da[time_dim], trend,
                     label=f"{full_label}, slope: {slope:.0e} PW/{slope_unit}",
-                    color=color, linestyle=ls, zorder=5, linewidth=3,
+                    color=color, linestyle=ls, zorder=zorder_item, linewidth=3,
                 )
             else:
                 ts.plot(ax=ax, label=full_label, color=color, linestyle=ls, linewidth=3, zorder=zorder_item)
@@ -152,16 +164,36 @@ def plot_timeseries(
     ax.set_title(f"{title} {label}")
     ax = plt.gca()  # or whatever your axis variable is
 
-    ax.xaxis.set_major_locator(mdates.YearLocator())        # tick only at each year
+    ax.xaxis.set_major_locator(mdates.YearLocator(base=1))        # tick only at each year
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))  # show only the year number
     
     ax.set_xlabel("Year" if not show_trend else "Time")
-    ax.set_ylabel(f"{savelabel.title()} anomaly (PW)")
+    if anomalies:
+        ax.set_ylabel(f"{savelabel} anomaly (PW)")
+    else: 
+        ax.set_ylabel(f"{savelabel} (PW)")
     if ylim is not None:
         ax.set_ylim(*ylim)
+        
     if xlim is not None:
         ax.set_xlim(*xlim)
-    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        
+    if loc_legend is not None:
+        ax.legend(
+            loc=loc_legend,
+            bbox_to_anchor=(0.5, -0.12),
+            ncol=len(data),      # one row, one entry per dataset
+            frameon=True,
+            # fontsize=10,
+        )   
+    # else assume its on the right next to the plot
+    else:
+        ax.legend(
+            loc='center left',
+            bbox_to_anchor=(1, 0.5),
+            ncol=1,
+            frameon=True,
+        )
     ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
     plt.tight_layout()
     if grid: 
@@ -360,7 +392,7 @@ def plot_hovmöller(data,
                 data_label="MHT",
                 anomalies=False, 
                 cmap="bwr",
-                vmin=None, vmax=None, 
+                vlimits=None, 
                 savefig=False
     ):
     """
@@ -382,18 +414,23 @@ def plot_hovmöller(data,
     #     # cmap = "bwr"
     #     # Anomaly = value - mean
     #     anom = MHT - mht_all_mean#.mean(dim="lat") # get overall mean over all latitudes!
-        vmin = np.nanmin(data.values)
-        vmax = np.nanmax(data.values)
-        limit = max(abs(vmin), abs(vmax))
-        vmin = -limit #- 0.5
-        vmax = limit #+ 0.5
+        if vlimits is not None:
+            vmin, vmax = vlimits
+        else:
+            vmin = np.nanmin(data.values)
+            vmax = np.nanmax(data.values)
+            limit = max(abs(vmin), abs(vmax))
+            vmin = -limit #- 0.5
+            vmax = limit #+ 0.5
         mesh = ax.pcolormesh(MHT[time_name], lats ,data.values, shading='auto', cmap=cmap, vmin=vmin, vmax=vmax)
         plt.colorbar(mesh, label=f'{data_label} anomalies (PW)', extend="both")
         plt.title(f'{data_label} Anomalies')
         savelabel = f"{data_label}_time_lat_anomalies.png"
 
     else:
-        if vmin is None and vmax is None:
+        if vlimits is not None:
+            vmin, vmax = vlimits
+        else:
             vmin = np.nanmin(MHT.values)
             vmax = np.nanmax(MHT.values)
             limit = max(abs(vmin), abs(vmax))
@@ -1068,3 +1105,454 @@ def block_coherence_index(
         
         
     return pd.DataFrame(results).T
+
+def cross_block_coherence_index(
+        mht,
+        r_crits,
+        lat_idx_a,   # e.g. NA lat indices
+        lat_idx_b,   # e.g. SA lat indices
+        lats,
+        periods,
+        lat_dim="lat",
+        time_dim="time"):
+    """
+    Computes mean within-block coherence for block A and block B separately,
+    plus mean cross-block coherence between A and B, over specified periods.
+    Uses the same significance thresholding (r_crits) as block_coherence_index.
+
+    Within-block: uses upper triangle (k=1) of the pairwise correlation matrix,
+    excluding the diagonal, to avoid double counting (same-latitude pairs).
+    Cross-block: uses the full A x B matrix since A and B are distinct latitude sets.
+    """
+    block_a = mht.isel({lat_dim: lat_idx_a})
+    block_b = mht.isel({lat_dim: lat_idx_b})
+    lats_a = lats[lat_idx_a]
+    lats_b = lats[lat_idx_b]
+
+    def within_block_coherence(vals, block_lats):
+        # vals: (time, lat) array for this block
+        corr_mat = np.corrcoef(vals.T)
+        n = len(block_lats)
+        for i in range(n):
+            for j in range(i + 1, n):
+                r_crit = max(r_crits[block_lats[i]], r_crits[block_lats[j]])
+                if np.abs(corr_mat[i, j]) < r_crit:
+                    corr_mat[i, j] = np.nan
+                    corr_mat[j, i] = np.nan
+        iu = np.triu_indices(n, k=1)
+        pair_vals = corr_mat[iu]
+        mean_coh = np.nanmean(pair_vals) if np.sum(~np.isnan(pair_vals)) >= 2 else np.nan
+        n_valid = np.sum(~np.isnan(pair_vals))
+        return mean_coh, n_valid, len(pair_vals)
+
+    def cross_block_coherence(a_vals, b_vals, lats_a, lats_b):
+        n_a, n_b = len(lats_a), len(lats_b)
+        cross_mat = np.full((n_a, n_b), np.nan)
+        for i in range(n_a):
+            for j in range(n_b):
+                r = np.corrcoef(a_vals[:, i], b_vals[:, j])[0, 1]
+                r_crit = max(r_crits[lats_a[i]], r_crits[lats_b[j]])
+                cross_mat[i, j] = r if np.abs(r) >= r_crit else np.nan
+        pair_vals = cross_mat.flatten()
+        mean_coh = np.nanmean(pair_vals) if np.sum(~np.isnan(pair_vals)) >= 2 else np.nan
+        n_valid = np.sum(~np.isnan(pair_vals))
+        return mean_coh, n_valid, len(pair_vals)
+
+    results = {}
+    for period_name, (t_start, t_end) in periods.items():
+        a_data = block_a.sel({time_dim: slice(t_start, t_end)}).transpose(time_dim, lat_dim).values
+        b_data = block_b.sel({time_dim: slice(t_start, t_end)}).transpose(time_dim, lat_dim).values
+
+        within_a_coh, within_a_n, within_a_total = within_block_coherence(a_data, lats_a)
+        within_b_coh, within_b_n, within_b_total = within_block_coherence(b_data, lats_b)
+        cross_coh, cross_n, cross_total = cross_block_coherence(a_data, b_data, lats_a, lats_b)
+
+        results[period_name] = {
+            "within_A_coherence": within_a_coh,
+            "within_A_n_valid": within_a_n,
+            "within_A_n_total": within_a_total,
+            "within_B_coherence": within_b_coh,
+            "within_B_n_valid": within_b_n,
+            "within_B_n_total": within_b_total,
+            "cross_AB_coherence": cross_coh,
+            "cross_AB_n_valid": cross_n,
+            "cross_AB_n_total": cross_total,
+        }
+    return pd.DataFrame(results).T
+
+def block_mean_amplitude(
+        mht,
+        lat_idx,
+        lats,
+        periods,
+        lat_dim="lat",
+        time_dim="time"):
+    """
+    Computes mean amplitude (std of each latitude's own time series) for a block
+    of latitudes, averaged over period. Amplitude here = temporal std per latitude,
+    i.e. how much that latitude's signal swings, NOT spread across latitudes.
+    """
+    block = mht.isel({lat_dim: lat_idx})
+    block_lats = lats[lat_idx]
+
+    results = {}
+    for period_name, (t_start, t_end) in periods.items():
+        period_data = block.sel({time_dim: slice(t_start, t_end)})
+
+        # std per latitude (over time), then mean across latitudes in the block
+        per_lat_std = period_data.std(dim=time_dim)  # shape: (lat,)
+        mean_amp = float(per_lat_std.mean())
+        std_of_amp = float(per_lat_std.std())  # how much amplitude itself varies within block
+
+        ### mean of block and then std of that mean
+        block_mean_ts = period_data.mean(dim=lat_dim)   # average across lat FIRST
+        amp_of_block_curve = float(block_mean_ts.std(dim=time_dim))
+        
+        results[period_name] = {
+            "mean_amplitude": mean_amp,
+            "std_across_lats": std_of_amp,
+            "mean_block_amplitude": amp_of_block_curve,
+        }
+    return pd.DataFrame(results).T
+
+
+#####################
+###### LEAD LAG #####
+#####################
+
+def plot_all_leadlag(
+    data, lats, lat_labels, all_lats, all_lat_labels,
+    nlags, all_lags, lag_units='years',
+    cmap=None, significance=False, n_effs=None,
+    ncols=4,
+    savefig=False, savename=None
+):
+    lats = np.asarray(lats)
+    all_lats = np.asarray(all_lats)
+
+    n_ref = len(lats)
+    n_target = len(all_lats)
+
+    nrows = int(np.ceil(n_ref / ncols))
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(7*ncols, 7*nrows),
+        sharey=True
+    )
+
+    if n_ref == 1:
+        axes = np.array([axes])
+    else:
+        axes = axes.flatten()
+            
+            
+    for ax, ref_lat, ref_label in zip(axes, lats, lat_labels):
+        ref_idx = np.argmin(np.abs(all_lats - ref_lat))
+        
+        ts_ref  = data.isel(lat=ref_idx).values
+        n_eff_ref = n_effs[ref_lat] if significance else None
+
+        corr_matrix = np.full((n_target, len(all_lags)), np.nan)
+        significance_mask = np.zeros((n_target, len(all_lags)), dtype=bool)
+
+        for i, (lat, lat_label) in enumerate(zip(all_lats, all_lat_labels)):
+            ts = data.isel(lat=i).values
+            
+            pos_corr, _ = ccf(ts_ref, ts, nlags=nlags, alpha=0.05)   
+            neg_corr, _ = ccf(ts, ts_ref, nlags=nlags, alpha=0.05)  
+            ### ccf gives also lag 0
+            full_corr = np.concatenate([neg_corr[1:][::-1], pos_corr])
+            
+            corr_matrix[i, :] = full_corr
+            if significance:
+                min_n_eff = min(n_eff_ref, n_effs[lat])
+                r_crit = critical_r(min_n_eff)
+                significance_mask[i, :] = np.abs(full_corr) >= r_crit
+
+            # if ref_lat == 45:
+            #     print(f"Reference latitude: {ref_lat}°N")
+            #     print(all_lags)
+            #     print(np.round(full_corr, 2))
+            #     print(all_lags[np.argmax(np.abs(full_corr))])
+                
+            max_corr_idx = np.argmax(full_corr)
+            max_lag = all_lags[max_corr_idx]
+            
+            ax.scatter(-max_lag, lat, color='black', s=70, marker='o', edgecolor='white', zorder=5)
+            
+        cf = ax.contourf(
+            -all_lags, all_lats, corr_matrix,
+            levels=np.linspace(-1, 1, 41),
+            cmap=cmap,
+        )
+        if significance:
+            ax.contourf(-all_lags, all_lats,
+                        np.where(~significance_mask, 1, np.nan),
+                        levels=[0.5, 1.5],
+                        colors='white', alpha=0.7)
+            savename = "lag_corr_significance.png"
+        else:
+            savename = f'lag_corr.png'
+        ax.axhline(ref_lat, color='red', linewidth=1.5)
+        ax.axvline(0, color='white', linewidth=1.5, linestyle='--')
+        ax.axhline(0, color='white', linewidth=1.5)
+
+        ax.set_yticks(all_lats)
+        ax.set_yticklabels(all_lat_labels, fontsize=20)
+        
+        if lag_units == "months":
+            xticks = np.arange(all_lags[0], all_lags[-1] + 1, 2)
+            xticklabels = xticks.astype(str)
+        else:
+            # assume its years!!
+            lag_step = 4
+            xticks = np.arange(-nlags, nlags + 1, lag_step)
+            xticklabels = (xticks // lag_step).astype(str)
+            
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(xticklabels, fontsize=20)
+
+        ax.annotate(f'← {ref_label} lags', xy=(0.25, +0.05), xycoords='axes fraction',
+                    ha='center', va='top', fontsize=20)
+        ax.annotate(f'{ref_label} leads →', xy=(0.75, +0.05), xycoords='axes fraction',
+                    ha='center', va='top', fontsize=20)
+
+        ax.set_ylabel('Latitude', fontsize=20)
+        ax.set_title(f'{ref_label}')
+
+
+    # hide any unused axes
+    for ax in axes[n_ref:]:
+        ax.set_visible(False)
+
+    cbar_ax = fig.add_axes([1.02, 0.15, 0.02, 0.7])
+    fig.colorbar(cf, cax=cbar_ax, label='Correlation')
+
+    ref_lat_handle = mlines.Line2D([], [], color='red', linewidth=1.5, label='Reference Latitude')
+    # eq_handle = mlines.Line2D([], [], color='white', linewidth=2, linestyle='-',
+    #         label="Equator / Lag 0")
+    lag0_handle = mlines.Line2D([], [], 
+        color='white',
+        linewidth=1.5, 
+        linestyle='--',
+        label='Lag 0',
+        path_effects=[pe.withStroke(linewidth=4, foreground='black')]
+    )
+    significance_handle = mpatches.Patch(
+        facecolor='white',
+        edgecolor='black',
+        linewidth=1.5,
+        alpha=1,
+        label='Not significant'
+    )
+    
+    max_lag_hanlde = mlines.Line2D([], [], color='black', marker='o', markersize=8, label='Max correlation lag', markeredgecolor='white')
+    
+    fig.supxlabel(
+        'Lag in years' if lag_units == 'years' else 'Lag in months',
+        fontsize=18,
+        y=0.08
+    )
+
+    fig.legend(
+        handles=[ref_lat_handle, lag0_handle, significance_handle, max_lag_hanlde],
+        loc='lower center',
+        bbox_to_anchor=(0.6, 0.0),
+        ncol=4,
+        frameon=True,
+        fontsize=14
+    )
+
+    plt.tight_layout(rect=[0, 0.04, 1, 1])
+    
+
+    if savefig:
+        if savename is None:
+            savename = "lag_corr_significance.png" if significance else "lag_corr.png"
+        os.makedirs("figures/lead_lag", exist_ok=True)
+        plt.savefig(f'figures/lead_lag/{savename}', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return fig, axes
+
+def plot_max_lag(
+    data, lats, lat_labels,
+    nlags, all_lags, lag_units='years',
+    cmap_lag=cmo.cm.curl, cmap_corr=None,
+    significance=False, n_effs=None,
+    title='Lag of Maximum Correlation',
+    savefig=False, savename=None
+):
+    n = len(lats)
+    lag_matrix     = np.full((n, n), np.nan)
+    maxcorr_matrix = np.full((n, n), np.nan)
+    significance_mask = np.zeros((n, n), dtype=bool)
+
+    for i, lat_i in enumerate(lats):
+        # print(lat_i)
+        ts_i = data.isel(lat=i).values
+        for j, lat_j in enumerate(lats):
+            # print(f"  {lat_j}")
+            ts_j = data.isel(lat=j).values
+
+            ##### ccf givves lag 0 so no need to add it manually
+            # pos_corr, _ = ccf(ts_i, ts_j, nlags=nlags, alpha=0.05)
+            # neg_corr, _ = ccf(ts_j, ts_i, nlags=nlags, alpha=0.05)
+            # lag0_corr = np.corrcoef(ts_i,  ts_j)[0, 1]
+            # full_corr = np.concatenate([neg_corr[::-1], [lag0_corr], pos_corr])
+            pos_corr, _ = ccf(ts_i, ts_j, nlags=nlags, alpha=0.05)   
+            neg_corr, _ = ccf(ts_j, ts_i, nlags=nlags, alpha=0.05)   
+
+            full_corr = np.concatenate([neg_corr[1:][::-1], pos_corr])
+            
+            ## accounting for the fact that lag -1 and +1 are often 0.99999
+            abs_corr = np.abs(full_corr)
+            max_val = np.max(abs_corr)
+            tol = 1e-5  # or something a bit looser, e.g. 1e-4, if you have float noise
+            candidate_idx = np.where(abs_corr >= max_val - tol)[0]
+            # among tied candidates, pick the one with lag closest to zero
+            idx_max = candidate_idx[np.argmin(np.abs(np.array(all_lags)[candidate_idx]))]            
+            
+            lag_matrix[i, j] = all_lags[idx_max]
+            maxcorr_matrix[i, j] = full_corr[idx_max]
+            # if i == 4:
+            #     if lat_i == lat_j:
+                    
+            #         for idx in range(len(full_corr)):
+            #             print(f"Lag {all_lags[idx]}: Correlation {full_corr[idx]}")
+            #         # print(f"Max correlation at same latitude {lat_i}°N: {full_corr[idx_max]:.3f} at lag {all_lags[idx_max]} ({lag_units})")
+            
+            if significance:
+                min_neff = min(n_effs[lat_i], n_effs[lat_j])
+                r_crit   = critical_r(min_neff)
+                significance_mask[i, j] = np.abs(full_corr[idx_max]) >= r_crit
+
+    if cmap_corr is None:
+        cmap_corr = cmap_lag
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 8.5), sharey=True)
+
+    # max lag plot
+    ax = axes[0]
+    
+    cf1 = ax.pcolormesh(lats, lats, lag_matrix, cmap=cmap_lag,
+                         vmin=-nlags, vmax=nlags)
+    
+    cb1 = plt.colorbar(cf1, ax=ax, label=f'Lag of max corr ({lag_units})')
+
+    lag_step = 4  # 4 quarters = 1 year
+    ticks = np.arange(-nlags, nlags + 1, lag_step)
+
+    cb1.set_ticks(ticks)
+    cb1.set_ticklabels((ticks / lag_step).astype(int))
+
+    cb1.set_label("Lag of max correlation (years)")
+
+    if significance:
+        sig_rows, sig_cols = np.where(significance_mask)
+        ax.scatter(lats[sig_cols], lats[sig_rows], marker='x',
+                    color='black', s=60, linewidths=1.5)
+
+    ax.set_xticks(lats); ax.set_xticklabels(lat_labels, rotation=45)
+    ax.set_yticks(lats); ax.set_yticklabels(lat_labels)
+    ax.set_xlabel('Latitude'); ax.set_ylabel('Latitude')
+    ax.set_title('Lag of maximum abs. Correlation')
+
+    # correlation at that lag plot
+    ax = axes[1]
+    cf2 = ax.pcolormesh(lats, lats, maxcorr_matrix, cmap=cmap_corr,
+                         vmin=-1, vmax=1)
+    cb2 = plt.colorbar(cf2, ax=ax, label='Correlation Coefficient')
+    cb2.set_ticks([-1, -0.5, 0, 0.5, 1])
+    cb2.set_ticklabels(['-1', '-0.5', '0', '+0.5', '+1'])
+
+    if significance:
+        sig_rows, sig_cols = np.where(significance_mask)
+        ax.scatter(lats[sig_cols], lats[sig_rows], marker='x',
+                    color='black', s=60, linewidths=1.5)
+
+    ax.set_xticks(lats); ax.set_xticklabels(lat_labels, rotation=45)
+    ax.set_xlabel('Latitude')
+    ax.set_title('Correlation at that Lag')
+
+    # fig.suptitle(title, fontsize=16)
+    plt.tight_layout()
+
+    if savefig:
+        if savename is None:
+            savename = "mht_lag_of_max_corr.png"
+        os.makedirs("figures/max_lag", exist_ok=True)
+        plt.savefig(f"figures/max_lag/{savename}", dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return lag_matrix, maxcorr_matrix, significance_mask
+
+
+
+def block_leadlag(
+    st_data, sa_data,
+    periods,
+    nlags,
+    all_lags,
+    time_dim="time",
+    n_eff_st=None, n_eff_sa=None,   # dict per period, for significance
+    plot=True
+):
+    """
+    Cross-correlation between ST and SA block-mean anomaly series,
+    per period. Returns max |corr|, the lag at which it occurs, and
+    whether ST leads or lags SA at that point.
+
+    Convention: positive lag => SA leads ST (SA's past predicts ST's future)
+                negative lag => ST leads SA
+    (matches ccf(x, y) = corr(x_t, y_{t+lag}); we build the symmetric
+    version the same way your plot_all_leadlag does)
+    """
+    rows = {}
+    curves = {}
+
+    for period_name, (t_start, t_end) in periods.items():
+        st_timeperiod = st_data.sel({time_dim: slice(t_start, t_end)}).values
+        sa_timeperiod = sa_data.sel({time_dim: slice(t_start, t_end)}).values
+
+        pos_corr, _ = ccf(st_timeperiod, sa_timeperiod, nlags=nlags, alpha=0.05)
+        neg_corr, _ = ccf(sa_timeperiod, st_timeperiod, nlags=nlags, alpha=0.05)
+        full_corr = np.concatenate([neg_corr[1:][::-1], pos_corr])
+
+        max_idx = np.argmax(np.abs(full_corr))
+        max_lag = all_lags[max_idx]
+        max_corr = full_corr[max_idx]
+
+        row = {
+            "max_abs_corr": max_corr,
+            "lag_at_max": max_lag,
+            "leader": "SA leads" if max_lag > 0 else ("ST leads" if max_lag < 0 else "in phase"),
+        }
+
+        if n_eff_st is not None and n_eff_sa is not None:
+            min_n_eff = min(n_eff_st, n_eff_sa)
+            r_crit = critical_r(min_n_eff)   # reuse your existing functio
+            print(f"minimal n eff for {period_name}: ", min_n_eff)
+            row["r_crit"] = r_crit
+            row["significant"] = bool(abs(max_corr) >= r_crit)
+
+        rows[period_name] = row
+        curves[period_name] = (all_lags, full_corr)
+
+    result_df = pd.DataFrame(rows).T
+
+    if plot:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for period_name, (all_lags, corr) in curves.items():
+            ax.plot(all_lags, corr, marker='o', label=period_name)
+        ax.axhline(0, color='gray', lw=0.8)
+        ax.axvline(0, color='gray', lw=0.8, ls='--')
+        ax.set_xlabel("Lag (SA relative to ST)")
+        ax.set_ylabel("Cross-correlation")
+        ax.legend()
+        ax.set_title("ST–SA lead/lag by period")
+        plt.tight_layout()
+        plt.show()
+
+    return result_df, curves

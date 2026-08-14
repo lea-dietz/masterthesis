@@ -88,22 +88,25 @@ def lowpass_filter(data, method="butter", cutoff=1/1):
         
     return data_smooth  
     
-def process_data(ds, anomalies=False, anomalies_detrended=False):
+def process_data(ds, anomalies=False, anomalies_detrended=False, restore_mean=False):
+    
+    overall_mean = ds.mean(dim="time")  # mean per quarter here
+    
     # 1. deseasonalize
-    seasonal_cim = ds.groupby("time.quarter").mean(dim="time")
-    anom = ds.groupby("time.quarter") - seasonal_cim
+    seasonal_clim = ds.groupby("time.quarter").mean(dim="time")
+    anom = ds.groupby("time.quarter") - seasonal_clim
+
     if anomalies:
-        return anom
+        return anom + overall_mean if restore_mean else anom
+
     # 2. detrend
     anom_detrended = detrend_dataset(anom)
     if anomalies_detrended:
-        return anom_detrended
+        return anom_detrended + overall_mean if restore_mean else anom_detrended
+
     # 3. lowpass filter
-    # CHOOSE method: butterworth filter (butter) or rolling mean (rolling)
-    
     data_filtered = lowpass_filter(anom_detrended, method="butter", cutoff=1/1)
-    
-    return data_filtered
+    return data_filtered + overall_mean if restore_mean else data_filtered
 
 
 def plot_filter_response(cutoff=1/1.5, fs=4, order=4, worN=2000,
