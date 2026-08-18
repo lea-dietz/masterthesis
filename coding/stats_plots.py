@@ -44,6 +44,7 @@ def parse_lat_label(label):
 def plot_timeseries(
     data,
     lats,
+    var="MHT",
     all_lats=None,
     labels=None,
     cmap=plt.cm.Spectral_r,
@@ -53,6 +54,7 @@ def plot_timeseries(
     title=None,
     ylim=None,
     xlim=None,
+    xbase=1,
     show_trend=False,
     grid=False,
     annotate_x=None,
@@ -164,14 +166,14 @@ def plot_timeseries(
     ax.set_title(f"{title} {label}")
     ax = plt.gca()  # or whatever your axis variable is
 
-    ax.xaxis.set_major_locator(mdates.YearLocator(base=1))        # tick only at each year
+    ax.xaxis.set_major_locator(mdates.YearLocator(base=xbase))        # tick only at each year
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))  # show only the year number
     
     ax.set_xlabel("Year" if not show_trend else "Time")
     if anomalies:
-        ax.set_ylabel(f"{savelabel} anomaly (PW)")
+        ax.set_ylabel(f"{var} anomaly (PW)")
     else: 
-        ax.set_ylabel(f"{savelabel} (PW)")
+        ax.set_ylabel(f"{var} (PW)")
     if ylim is not None:
         ax.set_ylim(*ylim)
         
@@ -295,7 +297,6 @@ def critical_r(n_eff, alpha=0.05):
     r_crit = t_crit / np.sqrt(t_crit**2 + df)
     return r_crit
 
-
    
 def compute_n_eff_and_r_crit(
         data,
@@ -348,6 +349,93 @@ def compute_n_eff_and_r_crit(
     
     return n_effs, r_crits, its_dict
 
+
+def significance_mask(data, ref_lats, all_lats, all_lags, nlags, r_crits):
+    corr_matrix = np.full((len(all_lats), len(all_lags)), np.nan)
+
+    for ref_lat in ref_lats:
+
+        ref_idx = np.argmin(np.abs(all_lats - ref_lat))
+        ts_ref = data.isel(lat=ref_idx).values
+
+        corr_matrix = np.full((len(all_lats), len(all_lags)), np.nan)
+        significance_mask = np.zeros((len(all_lats), len(all_lags)), dtype=bool)
+
+        r_ref = r_crits[ref_lat]
+
+        for i, lat in enumerate(all_lats):
+
+            ts = data.isel(lat=i).values
+
+            pos_corr, _ = ccf(ts_ref, ts, nlags=nlags, alpha=0.05)
+            neg_corr, _ = ccf(ts, ts_ref, nlags=nlags, alpha=0.05)
+
+            full_corr = np.concatenate([neg_corr[1:][::-1], pos_corr])
+            corr_matrix[i, :] = full_corr
+
+            r_lat = r_crits[lat]
+
+            # use the smaller effective sample size (larger critical r)
+            r_crit = max(r_ref, r_lat)
+            print(f"for ref lat: {ref_lat} and {lat}: r crit = {r_crit:.2f}")
+
+            significance_mask[i, :] = np.abs(full_corr) >= r_crit
+            
+
+def between_block_significance(
+        st_data, sa_data,
+        periods,
+        del_t, time_unit,
+        method="0cross",
+        alpha=0.05,
+        plot=False
+    ):
+        """
+        Correlation between ST and SA block-mean series per period,
+        with significance based on each series' own effective sample size (autocorrelation-corrected).
+        """
+        rows = {}
+        for period_name, (t0, t1) in periods.items():
+            st_p = st_data.sel(time=slice(t0, t1))
+            sa_p = sa_data.sel(time=slice(t0, t1))
+
+            N = st_p.sizes["time"]  # same length for both, assuming aligned time axes
+
+            its_st, _ = integral_time_scale(st_p, del_t=del_t, method=method)
+            its_sa, _ = integral_time_scale(sa_p, del_t=del_t, method=method)
+
+            n_eff_st = N * del_t / its_st
+            n_eff_sa = N * del_t / its_sa
+            n_eff_min = min(n_eff_st, n_eff_sa)   # conservative: less autocorrelated series sets the bound
+
+            r_crit = critical_r(n_eff_min, alpha=alpha)
+            r = float(np.corrcoef(st_p.values, sa_p.values)[0, 1])
+
+            rows[period_name] = {
+                "corr": r,
+                "n_eff_ST": n_eff_st,
+                "n_eff_SA": n_eff_sa,
+                "n_eff_used": n_eff_min,
+                "r_crit": r_crit,
+                "significant": bool(abs(r) >= r_crit),
+            }
+            if plot:
+                acf_calc_plot(
+                    st_p,
+                    N_eff=10,
+                    plot=True,
+                    title="ST (35-16°N) ACF and Sample Size"
+                )
+                acf_calc_plot(
+                    sa_p,
+                    N_eff=10,
+                    plot=True,
+                    title="SA (5°N-35°S) ACF and Sample Size"
+                )
+        return pd.DataFrame(rows).T
+
+    
+    
 
 def significance_mask(data, ref_lats, lats, all_lags, nlags, r_crits):
     corr_matrix = np.full((len(lats), len(all_lags)), np.nan)
@@ -472,8 +560,9 @@ def plot_crosscorr(
     cbar_orientation='vertical', cbar_location='left',
     savefig=False, savename=None
     ):
-    corr_matrix = np.corrcoef(data.values)  # (lat, lat)
     
+    corr_matrix = np.corrcoef(data.values)  # (lat, lat)
+    significance_mask = None
     
     fig, ax  = plt.subplots(figsize=(8, 6))
     
@@ -514,6 +603,8 @@ def plot_crosscorr(
     if savefig:
         plt.savefig(f"figures/cross_corr/{savename}", dpi=300, bbox_inches='tight')
     plt.show()
+    
+    return corr_matrix, significance_mask
 
 def plot_crosscorr_gif(
     data,
@@ -1179,6 +1270,7 @@ def cross_block_coherence_index(
             "cross_AB_n_total": cross_total,
         }
     return pd.DataFrame(results).T
+
 
 def block_mean_amplitude(
         mht,

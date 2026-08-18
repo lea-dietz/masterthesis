@@ -78,17 +78,36 @@ def butterworth_filter(ds, cutoff=1/1.5, fs=4):
         vectorize=True
     )
     
+def tukey_filter(ds, cutoff=1/1, fs=4, numtaps=13, alpha=0.5):
+    b = signal.firwin(
+        numtaps,
+        cutoff,
+        window=("tukey", alpha),
+        fs=fs,
+        pass_zero="lowpass",
+    )
+    a = 1.0
+    return xr.apply_ufunc(
+        apply_filtfilt, ds, kwargs={'b': b, 'a': a},
+        input_core_dims=[['time']], output_core_dims=[['time']],
+        vectorize=True
+    )
+    
 def lowpass_filter(data, method="butter", cutoff=1/1):
     if method == "rolling":
         # 4-quarter running mean filter
-        data_smooth = data.rolling(TIME=4, center=True, min_periods=4).mean()
-        data_smooth = data_smooth.dropna(dim="TIME", how="any")
+        data_smooth = data.rolling(time=4, center=True, min_periods=4).mean()
+        data_smooth = data_smooth.dropna(dim="time", how="any")
     elif method == "butter":
         data_smooth = butterworth_filter(data, cutoff=cutoff)
-        
+    elif method == "tukey":
+        data_smooth = tukey_filter(data, cutoff=cutoff)
     return data_smooth  
     
-def process_data(ds, anomalies=False, anomalies_detrended=False, restore_mean=False):
+def process_data(ds, anomalies=False, anomalies_detrended=False, 
+                method="butter", 
+                restore_mean=False
+    ):
     
     overall_mean = ds.mean(dim="time")  # mean per quarter here
     
@@ -105,7 +124,7 @@ def process_data(ds, anomalies=False, anomalies_detrended=False, restore_mean=Fa
         return anom_detrended + overall_mean if restore_mean else anom_detrended
 
     # 3. lowpass filter
-    data_filtered = lowpass_filter(anom_detrended, method="butter", cutoff=1/1)
+    data_filtered = lowpass_filter(anom_detrended, method=method, cutoff=1/1)
     return data_filtered + overall_mean if restore_mean else data_filtered
 
 
