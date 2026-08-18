@@ -48,6 +48,7 @@ def plot_timeseries(
     all_lats=None,
     labels=None,
     cmap=plt.cm.Spectral_r,
+    alphas=None,
     linestyles=None,
     label="specific",
     anomalies=True,
@@ -64,6 +65,7 @@ def plot_timeseries(
     time_dim="time",
     savefig=False,
     savelabel="mht",
+    savefolder="timeseries/anomalies/",
     ):
     """
     Plot MHT (or anomaly) time series per latitude, with optional linear trend overlay.
@@ -103,20 +105,32 @@ def plot_timeseries(
     fig, ax
     """
     
+    if not isinstance(data, dict):
+        data = {"data": data}
+        
     if all_lats is None:
         raise ValueError("Need the list of all reference latitudes (all_lats).")
 
     lats = np.asarray(lats, dtype=float)
     all_lats = np.asarray(all_lats, dtype=float)
-    colors = [cmap(i / max(len(all_lats) - 1, 1)) for i in range(len(all_lats))]    
+    
+    if isinstance(cmap, (list, tuple)):
+        colors = cmap
+        dataset_colors = {name: cmap[i % len(cmap)] for i, name in enumerate(data.keys())}
+    else:
+        colors = [cmap(i / max(len(all_lats) - 1, 1)) for i in range(len(all_lats))]
+        dataset_colors = {name: cmap(i / max(len(data) - 1, 1)) for i, name in enumerate(data.keys())}
+    
+    if alphas is None:
+        dataset_alphas = {name: 1.0 for name in data.keys()}
+    elif isinstance(alphas, dict):
+        dataset_alphas = {name: alphas.get(name, 1.0) for name in data.keys()}
+    else:  # list or tuple, cycled like colors
+        dataset_alphas = {name: alphas[i % len(alphas)] for i, name in enumerate(data.keys())}
 
     lat_to_idx = {l: i for i, l in enumerate(all_lats)}
-    if not isinstance(data, dict):
-        data = {"data": data}
-        
-    dataset_colors = {name: cmap(i / max(len(data) - 1, 1)) for i, name in enumerate(data.keys())}
 
-    default_styles = ["-", "-", "-.", ":"]
+    default_styles = ["-", "-", "-.", "-"]
     if linestyles is None:
         linestyles = {name: default_styles[i % len(default_styles)]
                       for i, name in enumerate(data.keys())}
@@ -126,6 +140,8 @@ def plot_timeseries(
     for name, da in data.items():
         zorder_item = 3
         ls = linestyles.get(name, "-")
+        alpha = dataset_alphas.get(name, 1.0)  # NEW: pull this dataset's alpha
+
         if show_trend:
             if timescale == "years":
                 time_numeric = (da[time_dim] - da[time_dim][0]) / np.timedelta64(1, 'D') / 365.25
@@ -138,12 +154,11 @@ def plot_timeseries(
 
         for lat in lats:
             idx = lat_to_idx[lat]
-            # color = colors[idx]
-            # here adjust the color for: if dataset has single latitude the different data has different color
             if len(lats) == 1:
                 color = dataset_colors[name]
             else:
                 color = colors[idx]
+
             lat_label = labels[idx] if labels else str(lat)
             full_label = name if len(lats) == 1 else (f"{lat_label} ({name})" if len(data) > 1 else lat_label)
             ts = da.isel({lat_dim: idx})
@@ -153,14 +168,16 @@ def plot_timeseries(
                     time_numeric, ts.values
                 )
                 trend = slope * time_numeric + intercept
-                ax.plot(da[time_dim], ts.values, color=color, alpha=0.3, linestyle=ls)
+                ax.plot(da[time_dim], ts.values, color=color, alpha=alpha * 0.3, linestyle=ls)
                 ax.plot(
                     da[time_dim], trend,
                     label=f"{full_label}, slope: {slope:.0e} PW/{slope_unit}",
                     color=color, linestyle=ls, zorder=zorder_item, linewidth=3,
+                    alpha=alpha
                 )
             else:
-                ts.plot(ax=ax, label=full_label, color=color, linestyle=ls, linewidth=3, zorder=zorder_item)
+                ts.plot(ax=ax, label=full_label, color=color, linestyle=ls,
+                         linewidth=3, zorder=zorder_item, alpha=alpha)  # NEW: alpha added here
         zorder_item += 1
 
     ax.set_title(f"{title} {label}")
@@ -209,8 +226,8 @@ def plot_timeseries(
             fontsize=10, color='red', ha='center'
         )
     if savefig:
-        os.makedirs("figures/timeseries/anomalies/", exist_ok=True)
-        plt.savefig(f"figures/timeseries/anomalies/{savelabel}_timeseries_{label}.png",
+        os.makedirs(f"figures/{savefolder}/", exist_ok=True)
+        plt.savefig(f"figures/{savefolder}/{savelabel}_timeseries_{label}.png",
                     dpi=300, bbox_inches='tight')
 
     #plt.show()
@@ -551,28 +568,37 @@ def plot_hovmöller(data,
     
     
 def plot_crosscorr(
-    data, 
-    lats, lat_labels,
-    cmap, 
-    significance=False,
-    n_effs=None,
-    title='Cross-Correlation of MHT anomalies', 
-    cbar_orientation='vertical', cbar_location='left',
-    savefig=False, savename=None
+        data, 
+        lats, lat_labels,
+        cmap, 
+        significance=False,
+        n_effs=None,
+        title='Cross-Correlation of MHT anomalies',
+        subtitle=None, 
+        cbar_orientation='vertical', cbar_location='left',
+        savefig=False, savename=None,
+        ax=None,
+        show=True,
+        show_cbar=True,
+        sharey=True,
     ):
     
     corr_matrix = np.corrcoef(data.values)  # (lat, lat)
     significance_mask = None
     
-    fig, ax  = plt.subplots(figsize=(8, 6))
-    
-    cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
-    if cbar_orientation == 'horizontal':
-        cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient', orientation=cbar_orientation, location=cbar_location)
+    if ax is None:
+        fig, ax  = plt.subplots(figsize=(8, 6))
     else:
-        cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient')
-    cb.set_ticks([-1, -0.5, 0, 0.5, 1])
-    cb.set_ticklabels(['-1', '-0.5', '0', '+0.5', '+1'])
+        fig = ax.figure
+
+    cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
+    if show_cbar:
+        if cbar_orientation == 'horizontal':
+            cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient', orientation=cbar_orientation, location=cbar_location)
+        else:
+            cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient')
+        cb.set_ticks([-1, -0.5, 0, 0.5, 1])
+        cb.set_ticklabels(['-1', '-0.5', '0', '+0.5', '+1'])
 
     # put significance mask when wanted:
     if significance:
@@ -595,16 +621,28 @@ def plot_crosscorr(
         if savename is None:
             savename = "mht_correlation_latlat.png"
             
-    plt.xticks(lats, lat_labels, rotation=45)
-    plt.yticks(lats, lat_labels)
-    plt.xlabel('Latitude')
-    plt.ylabel('Latitude')
-    plt.title(title)
+    ax.set_xticks(lats)
+    ax.set_xticklabels(lat_labels, rotation=45)
+    ax.set_yticks(lats)
+    ax.set_yticklabels(lat_labels)
+    if not sharey:
+        ax.set_xlabel('Latitude')
+        ax.set_ylabel('Latitude')
+        
+    if ax is None:
+        plt.title(title)
+    else:
+        ax.set_title(subtitle)
+    
+    ax.set_aspect('equal')
+
     if savefig:
         plt.savefig(f"figures/cross_corr/{savename}", dpi=300, bbox_inches='tight')
-    plt.show()
     
-    return corr_matrix, significance_mask
+    if show and ax is None:
+        plt.show()
+    
+    return corr_matrix, significance_mask, cf
 
 def plot_crosscorr_gif(
     data,

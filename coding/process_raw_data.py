@@ -62,54 +62,78 @@ def detrend_dataset(ds):
         output_core_dims=[["time"]]
     )
     
-def apply_filtfilt(data, b, a):
-    return signal.filtfilt(b, a, data, axis=-1)
+# def apply_filtfilt(data, b, a):
+#     return signal.filtfilt(b, a, data, axis=-1)
 
-def butterworth_filter(ds, cutoff=1/1.5, fs=4):
-    b, a = signal.butter(
-        4,
-        cutoff,
-        btype="low",
-        fs=fs
-    )
-    return xr.apply_ufunc(
-        apply_filtfilt, ds, kwargs={'b': b, 'a': a},
-        input_core_dims=[['time']], output_core_dims=[['time']],
-        vectorize=True
+# def butterworth_filter(ds, cutoff=1/1.5, fs=4):
+#     b, a = signal.butter(
+#         4,
+#         cutoff,
+#         btype="low",
+#         fs=fs
+#     )
+#     return xr.apply_ufunc(
+#         apply_filtfilt, ds, kwargs={'b': b, 'a': a},
+#         input_core_dims=[['time']], output_core_dims=[['time']],
+#         vectorize=True
+#     )
+    
+def tukey_filter(data, window=4, alpha=0.5, min_periods=4):
+    data_transpose = data.transpose("time", "lat")
+    ds_pd = data_transpose.to_pandas()
+
+    data_filtered = ds_pd.rolling(
+        window=window,  #timedelta, 4 = 4 quarters = 1 year
+        min_periods=min_periods,
+        center=True,
+        win_type="tukey",
+    ).mean(alpha=alpha)
+    
+    return xr.DataArray(
+        data_filtered.values,
+        dims=["time", "lat"],
+        coords={"time": data_filtered.index, "lat": data_filtered.columns},
     )
     
-def tukey_filter(ds, cutoff=1/1, fs=4, numtaps=13, alpha=0.5):
-    b = signal.firwin(
-        numtaps,
-        cutoff,
-        window=("tukey", alpha),
-        fs=fs,
-        pass_zero="lowpass",
-    )
-    a = 1.0
-    return xr.apply_ufunc(
-        apply_filtfilt, ds, kwargs={'b': b, 'a': a},
-        input_core_dims=[['time']], output_core_dims=[['time']],
-        vectorize=True
-    )
     
-def lowpass_filter(data, method="butter", cutoff=1/1):
+def lowpass_filter(data, method="tukey", window=4, alpha=0.5):
     if method == "rolling":
+        data_transpose = data.transpose("time", "lat")
+        ds_pd = data_transpose.to_pandas()
+
+        data_smooth_pd = ds_pd.rolling(
+            window=window,  #timedelta, 4 = 4 quarters = 1 year
+            min_periods=4,
+            center=True,
+        ).mean()
+        
+        data_smooth_xr = xr.DataArray(
+            data_smooth_pd.values,
+            dims=["time", "lat"],
+            coords={"time": data_smooth_pd.index, "lat": data_smooth_pd.columns},
+        )
         # 4-quarter running mean filter
-        data_smooth = data.rolling(time=4, center=True, min_periods=4).mean()
-        data_smooth = data_smooth.dropna(dim="time", how="any")
-    elif method == "butter":
-        data_smooth = butterworth_filter(data, cutoff=cutoff)
+        data_smooth = data_smooth_xr.dropna(dim="time", how="any")
+        
+    # elif method == "butter":
+    #     data_smooth = butterworth_filter(data)
+    
     elif method == "tukey":
-        data_smooth = tukey_filter(data, cutoff=cutoff)
+        data_smooth = tukey_filter(data).dropna(dim="time", how="any")
+        data_smooth = data_smooth.transpose("lat", "time")
+
+        
     return data_smooth  
     
 def process_data(ds, anomalies=False, anomalies_detrended=False, 
-                method="butter", 
-                restore_mean=False
+                method="tukey", 
+                restore_mean=False,
+                window=4,
+                alpha=0.5,
     ):
-    
-    overall_mean = ds.mean(dim="time")  # mean per quarter here
+    # change ds from xarray to pandas
+    # 1. deseasonalize
+    overall_mean = ds.mean(dim="time")  
     
     # 1. deseasonalize
     seasonal_clim = ds.groupby("time.quarter").mean(dim="time")
@@ -122,9 +146,10 @@ def process_data(ds, anomalies=False, anomalies_detrended=False,
     anom_detrended = detrend_dataset(anom)
     if anomalies_detrended:
         return anom_detrended + overall_mean if restore_mean else anom_detrended
-
+    
     # 3. lowpass filter
-    data_filtered = lowpass_filter(anom_detrended, method=method, cutoff=1/1)
+    data_filtered = lowpass_filter(anom_detrended, method=method, window=window, alpha=alpha)
+    
     return data_filtered + overall_mean if restore_mean else data_filtered
 
 
