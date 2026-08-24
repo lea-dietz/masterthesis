@@ -119,36 +119,38 @@ def lowpass_filter(data, method="tukey", window=4, alpha=0.5):
     #     data_smooth = butterworth_filter(data)
     
     elif method == "tukey":
-        data_smooth = tukey_filter(data).dropna(dim="time", how="any")
+        data_smooth = tukey_filter(data, window, alpha).dropna(dim="time", how="any")
         data_smooth = data_smooth.transpose("lat", "time")
 
         
     return data_smooth  
     
-def process_data(ds, anomalies=False, anomalies_detrended=False, 
+def process_data(ds,
+                detrended=False,
                 method="tukey", 
                 restore_mean=False,
                 window=4,
                 alpha=0.5,
     ):
-    # change ds from xarray to pandas
-    # 1. deseasonalize
     overall_mean = ds.mean(dim="time")  
     
-    # 1. deseasonalize
-    seasonal_clim = ds.groupby("time.quarter").mean(dim="time")
-    anom = ds.groupby("time.quarter") - seasonal_clim
+    # no deseasonalize- all data is already deseasonalized!!
+    # # 1. deseasonalize
+    # seasonal_clim = ds.groupby("time.quarter").mean(dim="time")
+    # anom = ds.groupby("time.quarter") - seasonal_clim
 
-    if anomalies:
-        return anom + overall_mean if restore_mean else anom
+    # if anomalies:
+    #     # return seasonal_clim
+    #     return anom + overall_mean if restore_mean else anom
 
     # 2. detrend
-    anom_detrended = detrend_dataset(anom)
-    if anomalies_detrended:
-        return anom_detrended + overall_mean if restore_mean else anom_detrended
+    detrended_data = detrend_dataset(ds)
+    ## if not restore mean then always anomalies
+    if detrended:
+        return detrended_data + overall_mean if restore_mean else detrended_data
     
     # 3. lowpass filter
-    data_filtered = lowpass_filter(anom_detrended, method=method, window=window, alpha=alpha)
+    data_filtered = lowpass_filter(detrended_data, method=method, window=window, alpha=alpha)
     
     return data_filtered + overall_mean if restore_mean else data_filtered
 

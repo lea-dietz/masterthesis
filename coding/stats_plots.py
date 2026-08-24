@@ -55,6 +55,7 @@ def plot_timeseries(
     title=None,
     ylim=None,
     xlim=None,
+    ylabel=None,
     xbase=1,
     show_trend=False,
     grid=False,
@@ -80,26 +81,11 @@ def plot_timeseries(
     all_lats : array-like, optional
         Full latitude list used to look up colors by index. If None, colors are
         generated automatically from a coolwarm colormap over `lats`.
-    labels : dict, optional
-        Mapping lat -> legend label. If None, str(lat) is used.
-    colors : list, optional
-        Colors indexed to match `all_lats`. If None, auto-generated.
-    label : str
-        Used in the title/filename when show_trend=False (legacy v1 behavior).
-    title : str, optional
-        Overrides the auto-generated title.
-    ylim : tuple, optional
-        (ymin, ymax).
-    xlim : same as ylim
     show_trend : bool
         If True, fit and overlay a linear trend per latitude (dashed line, slope in legend).
     timescale : str
         "years" or "days" — controls slope units when show_trend=True.
-    savefig : bool
-        If True, save PNG to figures/timeseries/anomalies/.
-    show : bool
-        If True, call plt.show(). Set False if you want to keep customizing fig/ax.
-
+   
     Returns
     -------
     fig, ax
@@ -130,7 +116,7 @@ def plot_timeseries(
 
     lat_to_idx = {l: i for i, l in enumerate(all_lats)}
 
-    default_styles = ["-", "-", "-.", "-"]
+    default_styles = ["-", "-.", "-", "-"]
     if linestyles is None:
         linestyles = {name: default_styles[i % len(default_styles)]
                       for i, name in enumerate(data.keys())}
@@ -186,11 +172,15 @@ def plot_timeseries(
     ax.xaxis.set_major_locator(mdates.YearLocator(base=xbase))        # tick only at each year
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))  # show only the year number
     
-    ax.set_xlabel("Year" if not show_trend else "Time")
-    if anomalies:
-        ax.set_ylabel(f"{var} anomaly (PW)")
-    else: 
-        ax.set_ylabel(f"{var} (PW)")
+    ax.set_xlabel("")
+    
+    if ylabel is None:
+        if anomalies:
+            ax.set_ylabel(f"{var} anomaly (PW)")
+        else: 
+            ax.set_ylabel(f"{var} (PW)")
+    else:
+        ax.set_ylabel(ylabel)
     if ylim is not None:
         ax.set_ylim(*ylim)
         
@@ -213,7 +203,8 @@ def plot_timeseries(
             ncol=1,
             frameon=True,
         )
-    ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+    
+    # ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
     plt.tight_layout()
     if grid: 
         plt.grid(alpha=0.5, linestyle="--")
@@ -242,7 +233,7 @@ def plot_timeseries(
 def acf_calc_plot(data, N_eff=None, plot=True, title="Autocorrelation Function am Sample Size vs Lag"):
     if not N_eff:
         N_eff = len(data)
-    acf_values = stattools.acf(data, nlags=N_eff-1)
+    acf_values = stattools.acf(data, nlags=N_eff-1, adjusted=False)
     lags = np.arange(len(acf_values))
     sample_sizes = N_eff - lags
     
@@ -269,14 +260,27 @@ def integral_time_scale(data, del_t=10, method="0cross"):
     # del t is sampling interval in days, for rapid monthly data del t = 10 days
     # note all data has to be in the same time units!
     # get acf values for the whole dataset
-    acf_values = stattools.acf(data, nlags=len(data)-1) 
+    acf_values = stattools.acf(data, nlags=len(data)-1, adjusted=False) 
  
     if method == "0cross":
-        lag_0cross = np.where(np.diff(np.sign(acf_values)))[0][0] + 1
+        lag_0cross = np.where(np.diff(np.sign(acf_values)))[0][0] + 1 
+        acf_values_0 = stattools.acf(data, nlags=lag_0cross, adjusted=False) 
+        # print(acf_values[lag_0cross])
+        max_lag = lag_0cross
+
+    if method == "0threshold":
+        ## all lags where sign changes: 
+        lags_0cross = np.where(np.diff(np.sign(acf_values)))[0] + 1 
+        first_0cross = lags_0cross[0]
+        if first_0cross != 1:
+            lag_0cross = first_0cross
+        else:
+            lag_0cross = first_0cross + 1
+        
         # get acf values up to the neede lag 
         acf_values_0 = stattools.acf(data, nlags=lag_0cross, adjusted=False) 
         max_lag = lag_0cross
-    
+
     if method == "plateau":
         # find the first lag where the acf drops below 1/e
         lag_plateau = np.where(acf_values < 1/np.e)[0][0]
@@ -323,10 +327,14 @@ def compute_n_eff_and_r_crit(
         del_t,
         time_unit,
         plateau_values=None,
-        plot=False):
+        method="0cross",
+        plot=False,
+        printout=False
+        ):
 
     N = data.sizes["time"]
-    print(f"Total number of samples: {N}")
+    if printout:
+        print(f"Total number of samples: {N}")
 
     n_effs = {}
     its_dict = {}
@@ -341,19 +349,9 @@ def compute_n_eff_and_r_crit(
         # if value in plateau_values:
         #     method = "plateau"
         # else:
-        method = "0cross"
 
         its, max_lags = integral_time_scale(ts, del_t=del_t, method=method)
-
-        N_eff = N * del_t / its
-        n_effs[value] = N_eff
-        its_dict[value] = its
-
-        print(
-            f"{coord_labels[idx]}: ITS = {its:.2f} {time_unit}, "
-            f"N_eff = {N_eff:.1f}"
-        )
-
+        
         if plot:
             acf_calc_plot(
                 ts,
@@ -361,6 +359,20 @@ def compute_n_eff_and_r_crit(
                 plot=True,
                 title=f"Autocorrelation at {coord_labels[idx]}"
             )
+            
+        if printout:
+           print(its)
+        
+        
+        N_eff = N * del_t / its
+        n_effs[value] = N_eff
+        its_dict[value] = its
+        if printout:
+            print(
+                f"{coord_labels[idx]}: ITS = {its:.2f} {time_unit}, "
+                f"N_eff = {N_eff:.1f}"
+            )
+
 
     r_crits = {value: critical_r(neff) for value, neff in n_effs.items()}
     
@@ -407,7 +419,7 @@ def between_block_significance(
         alpha=0.05,
         plot=False
     ):
-        """
+        """r_crit
         Correlation between ST and SA block-mean series per period,
         with significance based on each series' own effective sample size (autocorrelation-corrected).
         """
@@ -573,6 +585,7 @@ def plot_crosscorr(
         cmap, 
         significance=False,
         n_effs=None,
+        r_crits=None,
         title='Cross-Correlation of MHT anomalies',
         subtitle=None, 
         cbar_orientation='vertical', cbar_location='left',
@@ -600,13 +613,17 @@ def plot_crosscorr(
         cb.set_ticks([-1, -0.5, 0, 0.5, 1])
         cb.set_ticklabels(['-1', '-0.5', '0', '+0.5', '+1'])
 
-    # put significance mask when wanted:
+    # put significance mask if wanted:
     if significance:
         significance_mask = np.zeros_like(corr_matrix, dtype=bool)
         for i, lat_i in enumerate(lats):
             for j, lat_j in enumerate(lats):
-                min_neff = min(n_effs[lat_i], n_effs[lat_j])
-                r_crit   = critical_r(min_neff)
+                min_neff = min(n_effs[lat_i], n_effs[lat_j])                
+                if r_crits is None:
+                    r_crit   = critical_r(min_neff)
+                else:
+                    r_crit = min(r_crits[lat_i], r_crits[lat_j])
+                       
                 significance_mask[i, j] = np.abs(corr_matrix[i, j]) >= r_crit
 
         sig_rows, sig_cols = np.where(significance_mask)   
