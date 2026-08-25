@@ -286,6 +286,19 @@ def integral_time_scale(data, del_t=10, method="0cross"):
         lag_plateau = np.where(acf_values < 1/np.e)[0][0]
         acf_values_0 = stattools.acf(data, nlags=lag_plateau) 
         max_lag = lag_plateau
+    
+    if method == "minimum":
+        # find the first local minimum: acf[i] < acf[i-1] and acf[i] < acf[i+1]
+        lag_min = None
+        for i in range(1, len(acf_values) - 1):
+            if acf_values[i] < acf_values[i - 1] and acf_values[i] < acf_values[i + 1]:
+                lag_min = i
+                break
+        if lag_min is None:
+            # fallback: no local minimum found, use full available lags
+            lag_min = len(acf_values) - 1
+        acf_values_0 = stattools.acf(data, nlags=lag_min, adjusted=False)
+        max_lag = lag_min
         
     #  calculate its using the N_eff recevied depeding on the method   
     its = del_t  * sum(1 + 2*(max_lag-j)/max_lag*acf_values_0[j] for j in range(1, max_lag)) # for normalized acf
@@ -453,13 +466,13 @@ def between_block_significance(
                     st_p,
                     N_eff=10,
                     plot=True,
-                    title="ST (35-16°N) ACF and Sample Size"
+                    title=f"ST (35-16°N) ACF and Sample Size {period_name}"
                 )
                 acf_calc_plot(
                     sa_p,
                     N_eff=10,
                     plot=True,
-                    title="SA (5°N-35°S) ACF and Sample Size"
+                    title=f"SA (5°N-35°S) ACF and Sample Size {period_name}"
                 )
         return pd.DataFrame(rows).T
 
@@ -594,6 +607,7 @@ def plot_crosscorr(
         show=True,
         show_cbar=True,
         sharey=True,
+        vmin=-1, vmax=1,
     ):
     
     corr_matrix = np.corrcoef(data.values)  # (lat, lat)
@@ -604,7 +618,7 @@ def plot_crosscorr(
     else:
         fig = ax.figure
 
-    cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=-1, vmax=1)
+    cf = ax.pcolormesh(lats, lats, corr_matrix, cmap=cmap, vmin=vmin, vmax=vmax)
     if show_cbar:
         if cbar_orientation == 'horizontal':
             cb = plt.colorbar(cf, ax=ax, label='Correlation Coefficient', orientation=cbar_orientation, location=cbar_location)
