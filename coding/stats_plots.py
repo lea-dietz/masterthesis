@@ -121,7 +121,7 @@ def plot_timeseries(
         linestyles = {name: default_styles[i % len(default_styles)]
                       for i, name in enumerate(data.keys())}
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(18, 6))
 
     for name, da in data.items():
         zorder_item = 3
@@ -173,6 +173,8 @@ def plot_timeseries(
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))  # show only the year number
     
     ax.set_xlabel("")
+    
+    ax.axhline(0, color="grey", alpha=0.5, linestyle="--")
     
     if ylabel is None:
         if anomalies:
