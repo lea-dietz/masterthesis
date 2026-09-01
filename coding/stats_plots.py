@@ -220,7 +220,7 @@ def plot_timeseries(
         )
     if savefig:
         os.makedirs(f"figures/{savefolder}/", exist_ok=True)
-        plt.savefig(f"figures/{savefolder}/{savelabel}_timeseries_{label}.png",
+        plt.savefig(f"figures/{savefolder}/{savelabel}_{label}.png",
                     dpi=300, bbox_inches='tight')
 
     #plt.show()
