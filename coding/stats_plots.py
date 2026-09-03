@@ -121,7 +121,7 @@ def plot_timeseries(
         linestyles = {name: default_styles[i % len(default_styles)]
                       for i, name in enumerate(data.keys())}
 
-    fig, ax = plt.subplots(figsize=(18, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
 
     for name, da in data.items():
         zorder_item = 3
