@@ -126,6 +126,7 @@ def lowpass_filter(data, method="tukey", window=4, alpha=0.5):
     return data_smooth  
     
 def process_data(ds,
+                anomalies=False,
                 detrended=False,
                 method="tukey", 
                 restore_mean=False,
@@ -136,12 +137,12 @@ def process_data(ds,
     
     # no deseasonalize- all data is already deseasonalized!!
     # # 1. deseasonalize
-    # seasonal_clim = ds.groupby("time.quarter").mean(dim="time")
-    # anom = ds.groupby("time.quarter") - seasonal_clim
+    seasonal_clim = ds.groupby("time.quarter").mean(dim="time")
+    anom = ds.groupby("time.quarter") - seasonal_clim
 
-    # if anomalies:
-    #     # return seasonal_clim
-    #     return anom + overall_mean if restore_mean else anom
+    if anomalies:
+        # return seasonal_clim
+        return anom + overall_mean if restore_mean else anom
 
     # 2. detrend
     detrended_data = detrend_dataset(ds)
