@@ -343,6 +343,7 @@ def compute_n_eff_and_r_crit(
         time_unit,
         plateau_values=None,
         method="0cross",
+        alpha=0.05,
         plot=False,
         printout=False
         ):
@@ -358,14 +359,18 @@ def compute_n_eff_and_r_crit(
         plateau_values = []
 
     for idx, value in enumerate(coord_values):
-
+        # print("idx: ", idx)
+        # print("value: ", value)
         ts = data.isel({dim: idx})
 
         # if value in plateau_values:
         #     method = "plateau"
         # else:
-
-        its, max_lags = integral_time_scale(ts, del_t=del_t, method=method)
+        if value == 35.0:
+            print(f"value: {value}, therefore setting its to: 0.35 (same as 45 and 26°N)")
+            its = 0.35
+        else:
+            its, max_lags = integral_time_scale(ts, del_t=del_t, method=method)
         
         if plot:
             acf_calc_plot(
@@ -389,7 +394,7 @@ def compute_n_eff_and_r_crit(
             )
 
 
-    r_crits = {value: critical_r(neff) for value, neff in n_effs.items()}
+    r_crits = {value: critical_r(neff, alpha) for value, neff in n_effs.items()}
     
     return n_effs, r_crits, its_dict
 
@@ -616,7 +621,7 @@ def plot_crosscorr(
     significance_mask = None
     
     if ax is None:
-        fig, ax  = plt.subplots(figsize=(8, 6))
+        fig, ax  = plt.subplots(figsize=(8.5, 6.5))
     else:
         fig = ax.figure
 
@@ -785,86 +790,93 @@ def plot_crosscorr_hf_mht(
         plt.savefig(f"figures/cross_corr/{savename}", dpi=300, bbox_inches='tight')
     plt.show()
     
-def zero_lag_corr(ts1, ts2, lats, lat_labels, dimension="TIME", plot=False, savefig=False, polar_band=True, title=None):
+def zero_lag_corr(
+    ts1, ts2,
+    lats, lat_labels,
+    dimension="time",
+    r_crit=None, # should be one value for the latitude of ts1 
+    plot=False,
+    savefig=False,
+    band=False,
+    polar_band=False,
+    title=None,
+    figsize=(8, 4),
+    ax=None,          
+):
     """
-    Compute the zero-lag Pearson correlation coefficient between two time series and plot the result as a function of latitude.
-    
+    Compute the zero-lag Pearson correlation coefficient between two time series
+    and plot the result as a function of latitude. If `ax` is provided, plot into
+    it instead of creating a new figure (useful for building multi-panel figures).
     """
-    corr = xr.corr(ts1, ts2,  dim=dimension) 
-    if plot:
-        fig, ax = plt.subplots()
-        ax.plot(lats, corr, marker='o')
 
+    corr = xr.corr(ts1, ts2, dim=dimension)
+
+    if plot:
+        standalone = ax is None
+        if standalone:
+            fig, ax = plt.subplots(figsize=figsize)
+
+        ax.plot(lats, corr, marker='o')
         ax.set_xticks(lats)
-        ax.set_xticklabels(lat_labels, rotation=45)
+        ax.set_xticklabels(lat_labels, ha="right", rotation=45)
         ax.set_xlabel('Latitude')
-        ax.set_ylabel('Correlation Coefficient')
+
+        yticks = np.arange(-0.2, 1.2, 0.2)
+        yticklabels = (np.round(yticks, 1)).astype(str)
         
+        ax.set_yticks(yticks)
+        ax.set_yticklabels(yticklabels)
+        
+        ## put significance level using r_crit: 
+        if r_crit is not None: 
+            ax.axhline(r_crit, color="black", alpha=0.7, linewidth=1.2, linestyle="--")
+
         lat_name = get_lat_name(ts1)
+        lat_label = None
         if ts1[lat_name].size == 1:
             lat_sel = ts1[lat_name].values.item()
-            ax.axvline(lat_sel, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(lat_sel, color='red', linestyle='--', alpha=0.5)
 
-            lat_sel = int(str(lat_sel).replace(".0",""))
-            if lat_sel > 0:
-                lat_label = f"{lat_sel}°N"
+            lat_sel_int = int(str(lat_sel).replace(".0", ""))
+            if lat_sel_int > 0:
+                lat_label = f"{lat_sel_int}°N"
             else:
-                lat_sel =  np.abs(lat_sel)
-                lat_label = f"{lat_sel}°S"
+                lat_label = f"{abs(lat_sel_int)}°S"
 
-        # 2 latitde bands with high inner covariability 
-        band1_min, band1_max = 16, 35      # 16N–35N
-        band2_min, band2_max = -35, 5      # 35S–5N
-        band3_min, band3_max = 55, 60      # 55-65N
-        
-        ax.set_ylim(0, 1)
+        band1_min, band1_max = 16, 35
+        band2_min, band2_max = -35, 5
+        band3_min, band3_max = 55, 60
 
         y_min, y_max = ax.get_ylim()
+        if band:
+            rect1 = mpatches.Rectangle((band1_min, y_min), band1_max - band1_min,
+                                        y_max - y_min, color='red', alpha=0.2)
+            rect2 = mpatches.Rectangle((band2_min, y_min), band2_max - band2_min,
+                                        y_max - y_min, color='orange', alpha=0.1)
+            ax.add_patch(rect1)
+            ax.add_patch(rect2)
+            if polar_band:
+                rect3 = mpatches.Rectangle((band3_min, y_min), band3_max - band3_min,
+                                            y_max - y_min, color='magenta', alpha=0.1)
+                ax.add_patch(rect3)
 
-        # Rectangle for 16N–35N
-        rect1 = mpatches.Rectangle(
-            (band1_min, y_min),
-            band1_max - band1_min,
-            y_max - y_min,
-            color='red',
-            alpha=0.2,
-            #label='16°N–35°N'
-        )
-
-        # Rectangle for 35S–5N
-        rect2 = mpatches.Rectangle(
-            (band2_min, y_min),
-            band2_max - band2_min,
-            y_max - y_min,
-            color='orange',
-            alpha=0.1,
-            #label='35°S–5°N'
-        )
-        ax.add_patch(rect1)
-        ax.add_patch(rect2)
-        
-        if polar_band:
-            
-            rect3 = mpatches.Rectangle(
-                (band3_min, y_min),
-                band3_max - band3_min,
-                y_max - y_min,
-                color='magenta',
-                alpha=0.1,
-                #label='55°N–60°N'
-            )
-            ax.add_patch(rect3)
-        ax.legend(loc='best')
-        if title is None:
+        if title is None and lat_label is not None:
             ax.set_title(f"0-lag correlation for {lat_label}")
-        else:
-            ax.set_title(title)
-            
-        if savefig:
-            os.makedirs(f"figures/0lag/", exist_ok=True)
-            plt.savefig(f"figures/0lag/corr_{lat_label}.png", dpi=300, bbox_inches='tight')
-        plt.show()
-    return corr
+        elif title is not None:
+            ax.set_title(f"{title}")
+
+        ax.axhline(0, color='gray', linestyle='--', alpha=0.7, linewidth=1)
+        ax.grid(alpha=0.5, linestyle="--")
+
+        if standalone:
+            if savefig:
+                os.makedirs("figures/0lag/", exist_ok=True)
+                plt.savefig(f"figures/0lag/corr_{lat_label}.png", dpi=300, bbox_inches='tight')
+            fig.tight_layout()
+            plt.show()
+
+    return corr, lat_label
+
 
 def zero_lag_corr_regions(
         ts1, ts2, 
