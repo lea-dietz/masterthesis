@@ -366,11 +366,11 @@ def compute_n_eff_and_r_crit(
         # if value in plateau_values:
         #     method = "plateau"
         # else:
-        if value == 35.0:
-            print(f"value: {value}, therefore setting its to: 0.35 (same as 45 and 26°N)")
-            its = 0.35
-        else:
-            its, max_lags = integral_time_scale(ts, del_t=del_t, method=method)
+        # if value == 35.0:
+        #     print(f"value: {value}, therefore setting its to: 0.35 (same as 45 and 26°N)")
+        #     its = 0.35
+        # else:
+        its, max_lags = integral_time_scale(ts, del_t=del_t, method=method)
         
         if plot:
             acf_calc_plot(
@@ -794,6 +794,7 @@ def zero_lag_corr(
     ts1, ts2,
     lats, lat_labels,
     dimension="time",
+    period_label=None,
     r_crit=None, # should be one value for the latitude of ts1 
     plot=False,
     savefig=False,
@@ -801,7 +802,8 @@ def zero_lag_corr(
     polar_band=False,
     title=None,
     figsize=(8, 4),
-    ax=None,          
+    ax=None,
+    color=None,          
 ):
     """
     Compute the zero-lag Pearson correlation coefficient between two time series
@@ -816,7 +818,12 @@ def zero_lag_corr(
         if standalone:
             fig, ax = plt.subplots(figsize=figsize)
 
-        ax.plot(lats, corr, marker='o')
+        if color is None:
+            color="black"
+        ax.plot(lats, corr, 
+                 marker=".",
+                markersize=8, 
+                color=color, label=period_label)
         ax.set_xticks(lats)
         ax.set_xticklabels(lat_labels, ha="right", rotation=45)
         ax.set_xlabel('Latitude')
@@ -826,16 +833,16 @@ def zero_lag_corr(
         
         ax.set_yticks(yticks)
         ax.set_yticklabels(yticklabels)
-        
+        ax.set_ylabel("Correlation")
         ## put significance level using r_crit: 
         if r_crit is not None: 
-            ax.axhline(r_crit, color="black", alpha=0.7, linewidth=1.2, linestyle="--")
+            ax.axhline(r_crit, color="black", alpha=0.7, linewidth=1.5, linestyle="--")
 
         lat_name = get_lat_name(ts1)
         lat_label = None
         if ts1[lat_name].size == 1:
             lat_sel = ts1[lat_name].values.item()
-            ax.axvline(lat_sel, color='red', linestyle='--', alpha=0.5)
+            ax.axvline(lat_sel, color='red', linestyle=':', alpha=0.4, linewidth=1)
 
             lat_sel_int = int(str(lat_sel).replace(".0", ""))
             if lat_sel_int > 0:
@@ -860,12 +867,12 @@ def zero_lag_corr(
                                             y_max - y_min, color='magenta', alpha=0.1)
                 ax.add_patch(rect3)
 
-        if title is None and lat_label is not None:
-            ax.set_title(f"0-lag correlation for {lat_label}")
-        elif title is not None:
-            ax.set_title(f"{title}")
+        # if title is None and lat_label is not None:
+        #     ax.set_title(f"0-lag correlation for {lat_label}")
+        # elif title is not None:
+        #     ax.set_title(f"{title}")
 
-        ax.axhline(0, color='gray', linestyle='--', alpha=0.7, linewidth=1)
+        ax.axhline(0, color='gray', linestyle='--', alpha=0.4, linewidth=1)
         ax.grid(alpha=0.5, linestyle="--")
 
         if standalone:
@@ -876,6 +883,56 @@ def zero_lag_corr(
             plt.show()
 
     return corr, lat_label
+
+
+def plot_zero_lag_corr_grid(mht_sel, mht_detrended, 
+                            periods, periods_labels,
+                            lats, lat_labels, 
+                            lat_sel,
+                            signifance_periods=None,
+                            savefig=False, figsize=(11, 8)):
+    
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=True)
+    axes = axes.flatten()
+
+    corrs = {}
+    for ax, (period_name, (t0, t1)) in zip(axes, periods.items()):
+        
+        period_label = periods_labels[period_name]
+        period_data_lat = mht_sel.sel(time=slice(t0, t1))
+        period_data = mht_detrended.sel(time=slice(t0, t1))
+        if signifance_periods is not None:
+            r_crit_lat = signifance_periods[period_name]["r_crit"][lat_sel]
+            corr, lat_label = zero_lag_corr(
+                period_data_lat,
+                period_data,
+                lats=lats,
+                lat_labels=lat_labels,
+                r_crit=r_crit_lat,
+                plot=True,
+                dimension="time",
+                title=period_label,
+                ax=ax,
+            )
+        else: 
+            corr, lat_label = zero_lag_corr(
+                period_data_lat,
+                period_data,
+                lats=lats,
+                lat_labels=lat_labels,
+                plot=True,
+                dimension="time",
+                title=period_label,
+                ax=ax,
+            )
+        corrs[period_name] = corr
+
+    fig.tight_layout()
+    if savefig:
+        os.makedirs("figures/0lag/", exist_ok=True)
+        fig.savefig(f"figures/0lag/corr_{lat_label}.png", dpi=300, bbox_inches='tight')
+    plt.show()
+    return corrs
 
 
 def zero_lag_corr_regions(
