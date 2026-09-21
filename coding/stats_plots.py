@@ -842,7 +842,7 @@ def zero_lag_corr(
         lat_label = None
         if ts1[lat_name].size == 1:
             lat_sel = ts1[lat_name].values.item()
-            ax.axvline(lat_sel, color='red', linestyle=':', alpha=0.4, linewidth=1)
+            ax.axvline(lat_sel, color='red', linestyle='--', alpha=0.7, linewidth=1)
 
             lat_sel_int = int(str(lat_sel).replace(".0", ""))
             if lat_sel_int > 0:
