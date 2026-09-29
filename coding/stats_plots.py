@@ -303,7 +303,12 @@ def integral_time_scale(data, del_t=10, method="0cross"):
         max_lag = lag_min
         
     #  calculate its using the N_eff recevied depeding on the method   
-    its = del_t  * sum(1 + 2*(max_lag-j)/max_lag*acf_values_0[j] for j in range(1, max_lag)) # for normalized acf
+    if max_lag <= 1:
+        # no meaningful decorrelation structure beyond lag 0 — treat consecutive samples as independent
+        its = del_t
+    else:
+        its = del_t * sum(1 + 2*(max_lag-j)/max_lag*acf_values_0[j] for j in range(1, max_lag))
+    # its = del_t  * sum(1 + 2*(max_lag-j)/max_lag*acf_values_0[j] for j in range(1, max_lag)) # for normalized acf
     # 1 is outside of sum for next equation
     # its = del_t  * (1 + sum( 2*(max_lag-j)/max_lag*acf_values_0[j] for j in range(1, max_lag-1))) # for normalized acf
     
